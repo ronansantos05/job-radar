@@ -1,6 +1,7 @@
 # Dados privados: nunca versionar
 .env
 data/
+meu-perfil*.md
 profile.md
 *.db
 *.db-journal

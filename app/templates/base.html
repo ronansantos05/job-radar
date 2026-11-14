@@ -41,7 +41,7 @@ button,.btn{font:inherit;cursor:pointer;border:1px solid var(--line);background:
   border-radius:8px;padding:7px 12px;display:inline-block}
 button.primary,.btn.primary{background:var(--accent);border-color:var(--accent);color:#fff}
 button:hover,.btn:hover{filter:brightness(1.07);text-decoration:none}
-input[type=text],input[type=url],input[type=search],textarea,select{font:inherit;width:100%;padding:8px 10px;
+input[type=text],input[type=url],input[type=search],input[type=email],input[type=password],input[type=number],textarea,select{font:inherit;width:100%;padding:8px 10px;
   border:1px solid var(--line);border-radius:8px;background:var(--bg);color:var(--text)}
 textarea{font-family:ui-monospace,Consolas,monospace;font-size:13px;line-height:1.45}
 label{display:block;font-size:13px;color:var(--muted);margin:10px 0 4px}
@@ -50,20 +50,25 @@ label{display:block;font-size:13px;color:var(--muted);margin:10px 0 4px}
 pre.desc{white-space:pre-wrap;word-wrap:break-word;font:inherit;margin:0;max-height:520px;overflow:auto}
 ul.clean{margin:4px 0 10px;padding-left:18px}
 details summary{cursor:pointer;font-weight:600}
+.narrow{max-width:420px;margin:40px auto}
 </style>
 </head>
 <body>
 <header><div class="wrap top">
   <a class="brand" href="/">📡 job-radar</a>
+  {% if user %}
   <nav><a href="/">Vagas</a><a href="/perfil">Perfil</a></nav>
   <form method="post" action="/atualizar">
-    <button {% if running %}disabled{% endif %}>{% if running %}Coletando…{% else %}Atualizar agora{% endif %}</button>
+    <button {% if running %}disabled{% endif %}>{% if running %}Atualizando…{% else %}Atualizar agora{% endif %}</button>
   </form>
+  <span class="small muted">{{ user.name }}</span>
+  <form method="post" action="/sair"><button>Sair</button></form>
+  {% else %}<nav></nav>{% endif %}
 </div></header>
 <main><div class="wrap">
   {% if msg %}<div class="banner ok">{{ msg }}</div>{% endif %}
-  {% if not has_profile %}<div class="banner warn">Seu perfil está vazio. <a href="/perfil">Preencha o perfil</a> para as vagas serem analisadas.</div>{% endif %}
-  {% if not has_key %}<div class="banner warn">A chave da Groq não está configurada (<code>GROQ_API_KEY</code> no arquivo <code>.env</code>). As vagas são coletadas, mas não analisadas.</div>{% endif %}
+  {% if user and not has_profile %}<div class="banner warn">Seu perfil está vazio. <a href="/perfil">Preencha o perfil</a> para as vagas serem analisadas.</div>{% endif %}
+  {% if user and user.is_admin and not has_key %}<div class="banner warn">A chave da Groq não está configurada (<code>GROQ_API_KEY</code> no arquivo <code>.env</code>). As vagas são coletadas, mas não analisadas.</div>{% endif %}
   {% block content %}{% endblock %}
 </div></main>
 </body>

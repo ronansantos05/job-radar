@@ -4,15 +4,14 @@ import os
 import pytest
 
 os.environ["DISABLE_SCHEDULER"] = "1"
-os.environ["DASH_USER"] = "admin"
-os.environ["DASH_PASSWORD"] = "senha-de-teste"
 os.environ["LLM_DELAY_SECONDS"] = "0"
 
 from fastapi.testclient import TestClient  # noqa: E402
 
-from app import config, db, llm, main, pipeline, sources  # noqa: E402
+from app import auth, config, db, llm, main, pipeline, sources  # noqa: E402
 
-AUTH = ("admin", "senha-de-teste")
+PASSWORD = "senha-de-teste-123"
+VERDICT = '{"score": 82, "resumo": "bom", "pontos_fortes": ["python"], "tipo_contrato": "PJ", "remoto": true}'
 
 
 def fake_job(n=1, title="Python Machine Learning Engineer", **extra):
@@ -27,18 +26,40 @@ def fake_job(n=1, title="Python Machine Learning Engineer", **extra):
 def isolated(tmp_path, monkeypatch):
     monkeypatch.setenv("DATA_DIR", str(tmp_path))
     monkeypatch.setenv("GROQ_API_KEY", "chave-falsa")
+    monkeypatch.delenv("SIGNUP_CODE", raising=False)
+    monkeypatch.delenv("DASH_PASSWORD", raising=False)
+    monkeypatch.setattr(pipeline, "refresh_in_background", lambda uid: True)
+    monkeypatch.setattr(pipeline, "score_one_in_background", lambda uid, jid: None)
+    auth._failures.clear()
     db.init()
-    config.write_profile("Dev Python com experiência em machine learning.")
     yield
 
 
-@pytest.fixture
-def client():
-    with TestClient(main.app) as c:
-        yield c
+def new_client():
+    return TestClient(main.app, follow_redirects=False)
 
 
-# ------------------------------------------------------------ filtro
+def signup(client, email, name="Pessoa", code=None):
+    data = {"name": name, "email": email, "password": PASSWORD}
+    if code is not None:
+        data["code"] = code
+    return client.post("/cadastro", data=data)
+
+
+def make_user(email="a@example.com", profile="Dev Python com experiência em machine learning.", **prefs):
+    uid = db.create_user(email, "Pessoa", auth.hash_password(PASSWORD), config.Config(
+        keywords=prefs.get("keywords", ["python"]), exclude_title=prefs.get("exclude_title", [])),
+        profile=profile)
+    return db.get_user(uid)
+
+
+def add_job_for(user, n=1, **extra):
+    jid, _ = db.upsert_job(fake_job(n, **extra))
+    db.link(user["id"], jid, 1)
+    return jid
+
+
+# ------------------------------------------------------------ filtro e fontes
 
 def test_match_uses_whole_words():
     cfg = config.Config(keywords=["ml", "python"], exclude_title=["sales"])
@@ -46,14 +67,8 @@ def test_match_uses_whole_words():
     assert pipeline.match(fake_job(title="HTML developer", description="", tags=[]), cfg) is None
     assert pipeline.match(fake_job(title="Backend dev", description="Uses Python daily", tags=[]), cfg) == 0
     assert pipeline.match(fake_job(title="Sales Engineer (Python)"), cfg) is None
+    assert pipeline.match(fake_job(title="Bolsa em Ciencia de Dados"), config.Config(keywords=["ciência de dados"])) == 1
 
-
-def test_match_ignores_accents():
-    cfg = config.Config(keywords=["ciência de dados"])
-    assert pipeline.match(fake_job(title="Bolsa em Ciencia de Dados"), cfg) == 1
-
-
-# ------------------------------------------------------------ fontes
 
 def test_strip_html_and_dates():
     text = sources.strip_html("<p>Hello <b>world</b></p><script>alert(1)</script><ul><li>a</li><li>b</li></ul>")
@@ -83,88 +98,201 @@ def test_parsers():
     assert (w["company"], w["title"], w["description"]) == ("ACME", "Senior Dev", "hi")
 
 
-# ------------------------------------------------------------ pipeline
+# ------------------------------------------------------------ pipeline por usuário
 
-def test_run_collects_filters_and_scores(monkeypatch):
+def test_run_gives_each_user_their_own_list_and_scores(monkeypatch):
+    ana = make_user("ana@example.com", keywords=["python"], exclude_title=["sales"])
+    bia = make_user("bia@example.com", keywords=["designer"])
+    sem_perfil = make_user("caio@example.com", profile="", keywords=["python"], exclude_title=["sales"])
     monkeypatch.setattr(sources, "SOURCES", {"fake": lambda: [
-        fake_job(1), fake_job(2, title="Sales Manager"), fake_job(3, title="Old Python job",
-                                                                  posted_at="2020-01-01T00:00:00+00:00"),
+        fake_job(1), fake_job(2, title="Sales Manager"), fake_job(3, title="Product Designer", tags=[],
+                                                                  description="Figma"),
+        fake_job(4, title="Old Python job", posted_at="2020-01-01T00:00:00+00:00"),
     ], "broken": lambda: 1 / 0})
-    monkeypatch.setattr(config, "load_config", lambda *a: config.Config(
-        keywords=["python"], exclude_title=["sales"], sources=["fake", "broken"]))
-    monkeypatch.setattr(llm, "chat", lambda *a, **k: '{"score": 150, "resumo": "bom", "pontos_fortes": '
-                                                      '["python"], "tipo_contrato": "PJ", "remoto": true}')
+    monkeypatch.setattr(config, "load_config", lambda *a: config.Config(sources=["fake", "broken"]))
+    seen_profiles = []
+
+    def fake_chat(system, user, **k):
+        seen_profiles.append(user)
+        return '{"score": 150, "resumo": "bom", "tipo_contrato": "PJ", "remoto": true}'
+
+    monkeypatch.setattr(llm, "chat", fake_chat)
     result = pipeline.run_once()
-    assert (result["collected"], result["new"], result["scored"]) == (3, 1, 1)
+    assert (result["collected"], result["new"], result["scored"]) == (4, 3, 2)
     assert any("broken" in e for e in result["errors"])
-    (job,) = db.list_jobs("todas", 60)
-    assert job["score"] == 100 and job["status"] == "analisada"  # nota fora da faixa é limitada
-    assert job["verdict"]["tipo_contrato"] == "pj" and job["verdict"]["remoto"] is True
-    assert pipeline.run_once()["new"] == 0  # não duplica
+
+    (a_job,) = db.list_jobs(ana["id"], "todas", 60)
+    (b_job,) = db.list_jobs(bia["id"], "todas", 60)
+    assert a_job["title"] == "Python Machine Learning Engineer" and b_job["title"] == "Product Designer"
+    assert a_job["score"] == 100 and a_job["verdict"]["tipo_contrato"] == "pj"  # nota limitada a 100
+    (c_job,) = db.list_jobs(sem_perfil["id"], "todas", 60)
+    assert c_job["score"] is None and c_job["status"] == "nova"  # sem perfil, não gasta o modelo
+    assert pipeline.run_once()["scored"] == 0  # não repete análise
 
 
-def test_scoring_needs_profile(monkeypatch):
-    config.write_profile("")
-    db.insert_job(fake_job())
-    scored, errors = pipeline.score_pending(config.Config())
-    assert scored == 0 and "Perfil vazio" in errors[0]
+def test_tailor_uses_only_that_users_profile(monkeypatch):
+    ana = make_user("ana@example.com", profile="PERFIL-DA-ANA")
+    bia = make_user("bia@example.com", profile="PERFIL-DA-BIA")
+    jid = add_job_for(ana)
+    db.link(bia["id"], jid, 1)
+    prompts = []
+    monkeypatch.setattr(llm, "chat", lambda s, u, **k: prompts.append(u) or f"# CV\ntexto\n{pipeline.SEPARATOR}\nPrezados,")
+    pipeline.tailor(ana["id"], jid)
+    assert "PERFIL-DA-ANA" in prompts[0] and "PERFIL-DA-BIA" not in prompts[0]
+    a, b = db.get_job(ana["id"], jid), db.get_job(bia["id"], jid)
+    assert a["cv_md"] == "# CV\ntexto" and a["cover_md"] == "Prezados," and a["status"] == "curriculo"
+    assert b["cv_md"] is None and b["status"] == "nova"
 
 
-def test_tailor_splits_cv_and_cover(monkeypatch):
-    jid = db.insert_job(fake_job())
-    monkeypatch.setattr(llm, "chat", lambda *a, **k: f"# CV\ntexto\n{pipeline.SEPARATOR}\nPrezados,")
-    pipeline.tailor(jid)
-    job = db.get_job(jid)
-    assert job["cv_md"] == "# CV\ntexto" and job["cover_md"] == "Prezados," and job["status"] == "curriculo"
+# ------------------------------------------------------------ cadastro e login
+
+def test_first_signup_is_admin_then_signup_closes():
+    c = new_client()
+    assert c.get("/").status_code == 303 and c.get("/").headers["location"] == "/entrar"
+    r = signup(c, "dono@example.com")
+    assert r.status_code == 303 and r.headers["location"].startswith("/perfil")
+    assert db.get_user_by_email("dono@example.com")["is_admin"] == 1
+    assert c.get("/perfil").status_code == 200
+    # sem código de convite configurado, ninguém mais se cadastra
+    other = new_client()
+    signup(other, "intruso@example.com")
+    assert db.get_user_by_email("intruso@example.com") is None
 
 
-# ------------------------------------------------------------ dashboard
+def test_signup_with_invite_code(monkeypatch):
+    monkeypatch.setenv("SIGNUP_CODE", "convite-secreto")
+    c = new_client()
+    signup(c, "a@example.com", code="errado")
+    assert db.count_users() == 0
+    signup(c, "a@example.com", code="convite-secreto")
+    signup(new_client(), "b@example.com", code="convite-secreto")
+    assert db.count_users() == 2 and db.get_user_by_email("b@example.com")["is_admin"] == 0
+    signup(new_client(), "a@example.com", code="convite-secreto")  # e-mail repetido
+    signup(new_client(), "invalido", code="convite-secreto")
+    assert db.count_users() == 2
+    r = new_client().post("/cadastro", data={"name": "X", "email": "c@example.com", "password": "curta",
+                                             "code": "convite-secreto"})
+    assert r.status_code == 303 and db.count_users() == 2
 
-def test_requires_login(client):
-    assert client.get("/").status_code == 401
-    assert client.get("/", auth=("admin", "errada")).status_code == 401
-    assert client.get("/healthz").status_code == 200
+
+def test_login_logout_and_lockout():
+    make_user("a@example.com")
+    c = new_client()
+    assert c.post("/entrar", data={"email": "a@example.com", "password": "errada"}).headers["location"].startswith("/entrar")
+    assert c.get("/").status_code == 303
+    assert c.post("/entrar", data={"email": "A@Example.com ", "password": PASSWORD}).headers["location"] == "/"
+    assert c.get("/").status_code == 200
+    cookie = c.cookies.get(auth.SESSION_COOKIE)
+    assert cookie and db.session_user(cookie)["email"] == "a@example.com"
+    c.post("/sair")
+    assert db.session_user(cookie) is None and c.get("/").status_code == 303
+    # depois de várias senhas erradas, nem a senha certa entra
+    for _ in range(auth.MAX_FAILURES):
+        c.post("/entrar", data={"email": "a@example.com", "password": "errada"})
+    assert c.post("/entrar", data={"email": "a@example.com", "password": PASSWORD}).headers["location"].startswith("/entrar")
 
 
-def test_pages_render(client):
-    jid = db.insert_job(fake_job(title="<script>alert(1)</script> Dev"))
-    db.save_score(jid, 82, {"resumo": "ok", "pontos_fortes": ["a"], "lacunas": [], "tipo_contrato": "pj",
-                            "remoto": True, "aceita_pais": None, "idioma": "en"})
-    home = client.get("/", auth=AUTH)
+def test_passwords_are_hashed_and_change_ends_other_sessions():
+    user = make_user("a@example.com")
+    assert PASSWORD not in user["password_hash"] and auth.verify_password(PASSWORD, user["password_hash"])
+    assert not auth.verify_password("outra", user["password_hash"])
+    here, there = new_client(), new_client()
+    for c in (here, there):
+        c.post("/entrar", data={"email": "a@example.com", "password": PASSWORD})
+    here.post("/perfil/senha", data={"current": "errada", "new": "nova-senha-456"})
+    assert there.get("/").status_code == 200
+    here.post("/perfil/senha", data={"current": PASSWORD, "new": "nova-senha-456"})
+    assert here.get("/").status_code == 200 and there.get("/").status_code == 303
+    assert auth.verify_password("nova-senha-456", db.get_user(user["id"])["password_hash"])
+
+
+# ------------------------------------------------------------ isolamento entre contas
+
+def login(email):
+    c = new_client()
+    c.post("/entrar", data={"email": email, "password": PASSWORD})
+    return c
+
+
+def test_users_cannot_see_or_change_each_others_data():
+    ana = make_user("ana@example.com", profile="SEGREDO-DA-ANA")
+    bia = make_user("bia@example.com", profile="SEGREDO-DA-BIA")
+    jid = add_job_for(ana)
+    db.save_score(ana["id"], jid, 91, {"resumo": "ANALISE-DA-ANA", "tipo_contrato": "pj"})
+    db.save_docs(ana["id"], jid, "CV-DA-ANA", "CARTA-DA-ANA")
+    db.set_notes(ana["id"], jid, "NOTA-DA-ANA")
+    a, b = login("ana@example.com"), login("bia@example.com")
+
+    assert "ANALISE-DA-ANA" in a.get(f"/vaga/{jid}").text
+    # Bia não tem essa vaga na lista: não lê, não altera, não gera, não imprime
+    assert b.get(f"/vaga/{jid}").status_code == 404
+    assert b.get(f"/vaga/{jid}/imprimir").status_code == 404
+    for path, data in ((f"/vaga/{jid}/status", {"status": "recusada"}), (f"/vaga/{jid}/notas", {"notes": "x"}),
+                       (f"/vaga/{jid}/documentos", {"cv_md": "x"}), (f"/vaga/{jid}/gerar", {})):
+        assert b.post(path, data=data).status_code == 404
+    job = db.get_job(ana["id"], jid)
+    assert (job["status"], job["notes"], job["cv_md"]) == ("analisada", "NOTA-DA-ANA", "CV-DA-ANA")
+
+    # mesmo quando as duas têm a mesma vaga, os dados de cada uma são separados
+    db.link(bia["id"], jid, 1)
+    page = b.get(f"/vaga/{jid}").text
+    for secret in ("ANALISE-DA-ANA", "CV-DA-ANA", "CARTA-DA-ANA", "NOTA-DA-ANA", "SEGREDO-DA-ANA"):
+        assert secret not in page
+    b.post(f"/vaga/{jid}/status", data={"status": "submetida"})
+    assert db.get_job(ana["id"], jid)["status"] == "analisada"
+    assert db.counts(ana["id"], 60)["ja_submetidas"] == 0 and db.counts(bia["id"], 60)["ja_submetidas"] == 1
+
+    home = b.get("/?view=todas").text + b.get("/perfil").text
+    assert "SEGREDO-DA-BIA" in home and "ANA" not in home.replace("ana@example.com", "")
+    assert all(e["kind"] != "analisada" for e in db.recent_events(bia["id"]))
+
+
+def test_manual_jobs_are_private_and_profile_saves_per_user():
+    ana, bia = make_user("ana@example.com"), make_user("bia@example.com")
+    a, b = login("ana@example.com"), login("bia@example.com")
+    r = a.post("/adicionar", data={"title": "Vaga secreta do LinkedIn", "url": "javascript:alert(1)",
+                                   "description": "Python"})
+    jid = r.headers["location"].split("/vaga/")[1].split("?")[0]
+    assert db.get_job(ana["id"], jid)["url"] == "" and b.get(f"/vaga/{jid}").status_code == 404
+    assert "Vaga secreta" not in b.get("/?view=todas").text
+    pipeline.link_user(bia, config.Config(keywords=["python", "linkedin"]))  # a coleta não vaza vaga manual
+    assert db.list_jobs(bia["id"], "todas", 60) == []
+
+    a.post("/perfil", data={"name": "Ana", "profile": "Novo perfil da Ana", "preferences": "remoto",
+                            "keywords": "python\nml", "exclude_title": "", "min_score": "250"})
+    saved = db.get_user(ana["id"])
+    assert (saved["profile"], saved["keywords"], saved["min_score"]) == ("Novo perfil da Ana", "python\nml", 100)
+    assert db.get_user(bia["id"])["profile"] != "Novo perfil da Ana"
+    assert pipeline.user_config(saved, config.Config()).keywords == ["python", "ml"]
+
+
+# ------------------------------------------------------------ páginas e segurança
+
+def test_pages_render_and_escape_html():
+    user = make_user("a@example.com")
+    jid = add_job_for(user, title="<script>alert(1)</script> Dev")
+    db.save_score(user["id"], jid, 82, {"resumo": "ok", "pontos_fortes": ["a"], "lacunas": [],
+                                        "tipo_contrato": "pj", "remoto": True, "aceita_pais": None, "idioma": "en"})
+    c = login("a@example.com")
+    home = c.get("/")
     assert home.status_code == 200 and "<script>alert(1)" not in home.text and "82" in home.text
     for view in db.VIEWS:
-        assert client.get(f"/?view={view}", auth=AUTH).status_code == 200
-    assert client.get(f"/vaga/{jid}", auth=AUTH).status_code == 200
-    assert client.get("/perfil", auth=AUTH).status_code == 200
-    assert client.get("/vaga/nao-existe", auth=AUTH).status_code == 404
+        assert c.get(f"/?view={view}").status_code == 200
+    assert c.get(f"/vaga/{jid}").status_code == 200 and c.get("/vaga/nao-existe").status_code == 404
+    assert new_client().get("/entrar").status_code == 200 and new_client().get("/healthz").text == "ok"
+    db.save_docs(user["id"], jid, "# Nome\n<img src=x onerror=alert(1)> [x](javascript:alert(1))", "")
+    printed = c.get(f"/vaga/{jid}/imprimir")
+    assert "<h1>Nome</h1>" in printed.text and "<img" not in printed.text and "javascript:" not in printed.text
 
 
-def test_status_flow_and_csrf(client):
-    jid = db.insert_job(fake_job())
-    blocked = client.post(f"/vaga/{jid}/status", data={"status": "submetida"}, auth=AUTH,
-                          headers={"Origin": "https://site-malicioso.example"})
-    assert blocked.status_code == 403 and db.get_job(jid)["status"] == "nova"
-    ok = client.post(f"/vaga/{jid}/status", data={"status": "submetida"}, auth=AUTH, follow_redirects=False)
-    assert ok.status_code == 303
-    job = db.get_job(jid)
+def test_csrf_and_status_flow():
+    user = make_user("a@example.com")
+    jid = add_job_for(user)
+    c = login("a@example.com")
+    blocked = c.post(f"/vaga/{jid}/status", data={"status": "submetida"},
+                     headers={"Origin": "https://site-malicioso.example"})
+    assert blocked.status_code == 403 and db.get_job(user["id"], jid)["status"] == "nova"
+    assert c.post(f"/vaga/{jid}/status", data={"status": "submetida"}).status_code == 303
+    job = db.get_job(user["id"], jid)
     assert job["status"] == "submetida" and job["applied_at"]
-    assert db.counts(60)["ja_submetidas"] == 1
-    assert client.post(f"/vaga/{jid}/status", data={"status": "hackeada"}, auth=AUTH).status_code == 400
-
-
-def test_manual_job_and_print_is_sanitized(client, monkeypatch):
-    monkeypatch.setattr(pipeline, "score_one_in_background", lambda jid: None)
-    r = client.post("/adicionar", auth=AUTH, follow_redirects=False,
-                    data={"title": "Vaga do LinkedIn", "url": "javascript:alert(1)", "description": "Python"})
-    assert r.status_code == 303
-    (job,) = db.list_jobs("todas", 60)
-    assert job["source"] == "manual" and job["url"] == ""
-    db.save_docs(job["id"], "# Nome\n<img src=x onerror=alert(1)> [x](javascript:alert(1))", "")
-    page = client.get(f"/vaga/{job['id']}/imprimir", auth=AUTH)
-    assert page.status_code == 200 and "<h1>Nome</h1>" in page.text
-    assert "<img" not in page.text and "javascript:" not in page.text
-
-
-def test_profile_save(client):
-    client.post("/perfil", data={"profile": "Novo perfil"}, auth=AUTH)
-    assert config.read_profile() == "Novo perfil"
+    assert c.post(f"/vaga/{jid}/status", data={"status": "hackeada"}).status_code == 400

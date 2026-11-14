@@ -1,4 +1,4 @@
-"""Dashboard web (FastAPI), protegido por senha, + agendador da coleta."""
+"""Dashboard web (FastAPI) com contas de usuário + agendador da coleta."""
 from __future__ import annotations
 
 import asyncio
@@ -14,38 +14,28 @@ from pathlib import Path
 from urllib.parse import quote, urlparse
 
 import markdown as md
-from fastapi import APIRouter, Depends, FastAPI, Form, HTTPException, Request
+from fastapi import Depends, FastAPI, Form, HTTPException, Request
 from fastapi.responses import PlainTextResponse, RedirectResponse
-from fastapi.security import HTTPBasic, HTTPBasicCredentials
 from fastapi.templating import Jinja2Templates
 
-from . import config, db, llm, pipeline
+from . import auth, config, db, llm, pipeline
 
 config.load_env()
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
 log = logging.getLogger("jobradar")
 
 templates = Jinja2Templates(directory=str(Path(__file__).parent / "templates"))
-security = HTTPBasic()
-_password: str | None = None
 
 
-def dashboard_password() -> str:
-    """Sem DASH_PASSWORD o painel não fica aberto: gera uma senha temporária e avisa no log."""
-    global _password
-    if _password is None:
-        _password = os.getenv("DASH_PASSWORD") or ""
-        if not _password:
-            _password = secrets.token_urlsafe(12)
-            log.warning("DASH_PASSWORD não definida. Senha temporária desta execução: %s", _password)
-    return _password
+class NeedsLogin(Exception):
+    pass
 
 
-def require_login(cred: HTTPBasicCredentials = Depends(security)) -> None:
-    user_ok = secrets.compare_digest(cred.username.encode(), os.getenv("DASH_USER", "admin").encode())
-    pass_ok = secrets.compare_digest(cred.password.encode(), dashboard_password().encode())
-    if not (user_ok and pass_ok):
-        raise HTTPException(401, "Login inválido", headers={"WWW-Authenticate": "Basic"})
+def current_user(request: Request) -> dict:
+    user = db.session_user(request.cookies.get(auth.SESSION_COOKIE))
+    if not user:
+        raise NeedsLogin()
+    return user
 
 
 async def _scheduler() -> None:
@@ -58,7 +48,9 @@ async def _scheduler() -> None:
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
     db.init()
-    dashboard_password()
+    if db.count_users() == 0 and not auth.invite_code():
+        log.warning("Nenhuma conta criada e SIGNUP_CODE não definido: a primeira pessoa que abrir "
+                    "/cadastro vira administradora. Crie a sua conta agora.")
     task = None
     if os.getenv("DISABLE_SCHEDULER") != "1":
         task = asyncio.create_task(_scheduler())
@@ -68,7 +60,11 @@ async def lifespan(_app: FastAPI):
 
 
 app = FastAPI(title="job-radar", lifespan=lifespan, docs_url=None, redoc_url=None, openapi_url=None)
-router = APIRouter(dependencies=[Depends(require_login)])
+
+
+@app.exception_handler(NeedsLogin)
+async def needs_login(_request: Request, _exc: NeedsLogin):
+    return RedirectResponse("/entrar", status_code=303)
 
 
 @app.middleware("http")
@@ -90,7 +86,7 @@ async def security_middleware(request: Request, call_next):
     return response
 
 
-# ---------------------------------------------------------------- helpers de template
+# ---------------------------------------------------------------- helpers
 
 def fmt_date(value: str | None) -> str:
     if not value:
@@ -125,10 +121,11 @@ templates.env.filters["datetime"] = fmt_datetime
 templates.env.filters["safe_url"] = safe_url
 
 
-def page(request: Request, name: str, **ctx):
+def page(request: Request, name: str, user: dict | None = None, **ctx):
     ctx.setdefault("msg", request.query_params.get("msg", ""))
+    ctx["user"] = user
     ctx["running"] = pipeline.state["running"]
-    ctx["has_profile"] = bool(config.read_profile())
+    ctx["has_profile"] = bool(user and (user.get("profile") or "").strip())
     ctx["has_key"] = llm.configured()
     return templates.TemplateResponse(request, name, ctx)
 
@@ -139,44 +136,125 @@ def back(url: str, msg: str = "") -> RedirectResponse:
     return RedirectResponse(url, status_code=303)
 
 
-def job_or_404(jid: str) -> dict:
-    job = db.get_job(jid)
+def job_or_404(uid: int, jid: str) -> dict:
+    job = db.get_job(uid, jid)  # só encontra vagas da lista deste usuário
     if not job:
         raise HTTPException(404, "Vaga não encontrada")
     return job
 
 
-# ---------------------------------------------------------------- rotas
+def client_ip(request: Request) -> str:
+    return request.client.host if request.client else "?"
+
+
+def start_session(request: Request, uid: int, url: str) -> RedirectResponse:
+    response = RedirectResponse(url, status_code=303)
+    response.set_cookie(auth.SESSION_COOKIE, db.create_session(uid), max_age=auth.SESSION_DAYS * 86400,
+                        httponly=True, samesite="lax", secure=request.url.scheme == "https", path="/")
+    return response
+
+
+def signup_allowed() -> bool:
+    return bool(auth.invite_code()) or db.count_users() == 0
+
+
+# ---------------------------------------------------------------- páginas públicas
 
 @app.get("/healthz", include_in_schema=False)
 def healthz():
     return PlainTextResponse("ok")
 
 
-@router.get("/")
-def index(request: Request, view: str = "compativeis", q: str = ""):
-    cfg = config.load_config()
+@app.get("/entrar")
+def login_page(request: Request):
+    if db.session_user(request.cookies.get(auth.SESSION_COOKIE)):
+        return RedirectResponse("/", status_code=303)
+    return page(request, "login.html", signup_allowed=signup_allowed())
+
+
+@app.post("/entrar")
+def login(request: Request, email: str = Form(...), password: str = Form(...)):
+    email = email.strip().lower()[:254]
+    keys = (f"ip:{client_ip(request)}", f"mail:{email}")
+    if any(auth.blocked(k) for k in keys):
+        return back("/entrar", "Muitas tentativas. Espere 10 minutos e tente de novo.")
+    user = db.get_user_by_email(email)
+    # compara mesmo sem usuário, para o tempo de resposta não revelar se o e-mail existe
+    ok = auth.verify_password(password, user["password_hash"] if user else auth.hash_password("x"))
+    if not (user and ok):
+        for k in keys:
+            auth.record_failure(k)
+        return back("/entrar", "E-mail ou senha incorretos.")
+    for k in keys:
+        auth.clear_failures(k)
+    return start_session(request, user["id"], "/" if (user.get("profile") or "").strip() else "/perfil")
+
+
+@app.get("/cadastro")
+def signup_page(request: Request):
+    return page(request, "signup.html", allowed=signup_allowed(), needs_code=bool(auth.invite_code()))
+
+
+@app.post("/cadastro")
+def signup(request: Request, name: str = Form(...), email: str = Form(...), password: str = Form(...),
+           code: str = Form("")):
+    if not signup_allowed():
+        return back("/cadastro", "O cadastro está fechado. Peça um convite a quem administra este painel.")
+    key = f"signup:{client_ip(request)}"
+    if auth.blocked(key):
+        return back("/cadastro", "Muitas tentativas. Espere 10 minutos e tente de novo.")
+    expected = auth.invite_code()
+    if expected and not secrets.compare_digest(code.strip().encode(), expected.encode()):
+        auth.record_failure(key)
+        return back("/cadastro", "Código de convite incorreto.")
+    name, email = " ".join(name.split())[:80], email.strip().lower()[:254]
+    if not name or not auth.valid_email(email):
+        return back("/cadastro", "Informe seu nome e um e-mail válido.")
+    if len(password) < auth.MIN_PASSWORD or len(password) > 200:
+        return back("/cadastro", f"A senha precisa ter pelo menos {auth.MIN_PASSWORD} caracteres.")
+    # quem atualiza da versão de um usuário só: o perfil antigo vai para a primeira conta
+    legacy = config.read_profile() if db.count_users() == 0 else ""
+    uid = db.create_user(email, name, auth.hash_password(password), config.load_config(), profile=legacy)
+    if uid is None:
+        return back("/cadastro", "Já existe uma conta com esse e-mail. Tente entrar.")
+    log.info("nova conta criada (id %s)", uid)
+    return start_session(request, uid, "/perfil?msg=" + quote("Conta criada. Agora descreva o seu perfil."))
+
+
+@app.post("/sair")
+def logout(request: Request):
+    db.delete_session(request.cookies.get(auth.SESSION_COOKIE))
+    response = RedirectResponse("/entrar", status_code=303)
+    response.delete_cookie(auth.SESSION_COOKIE, path="/")
+    return response
+
+
+# ---------------------------------------------------------------- páginas do usuário
+
+@app.get("/")
+def index(request: Request, view: str = "compativeis", q: str = "", user: dict = Depends(current_user)):
     if view not in db.VIEWS:
         view = "compativeis"
+    min_score = user["min_score"]
     return page(
-        request, "index.html",
-        jobs=db.list_jobs(view, cfg.min_score, q.strip()[:80]),
-        counts=db.counts(cfg.min_score), views=db.VIEWS, view=view, q=q,
-        min_score=cfg.min_score, events=db.recent_events(), last_run=db.last_run(),
+        request, "index.html", user,
+        jobs=db.list_jobs(user["id"], view, min_score, q.strip()[:80]),
+        counts=db.counts(user["id"], min_score), views=db.VIEWS, view=view, q=q,
+        min_score=min_score, events=db.recent_events(user["id"]), last_run=db.last_run(),
         model=llm.model(),
     )
 
 
-@router.post("/atualizar")
-def refresh():
-    started = pipeline.run_in_background()
-    return back("/", "Coleta iniciada. Atualize a página em alguns minutos." if started
-                else "Já existe uma coleta em andamento.")
+@app.post("/atualizar")
+def refresh(user: dict = Depends(current_user)):
+    started = pipeline.refresh_in_background(user["id"])
+    return back("/", "Atualização iniciada. Recarregue a página em alguns minutos." if started
+                else "Já existe uma atualização em andamento.")
 
 
-@router.post("/adicionar")
+@app.post("/adicionar")
 def add_job(title: str = Form(...), company: str = Form(""), url: str = Form(""),
-            description: str = Form(...)):
+            description: str = Form(...), user: dict = Depends(current_user)):
     title, description = title.strip()[:200], description.strip()[:12000]
     if not title or not description:
         return back("/", "Informe pelo menos o título e a descrição da vaga.")
@@ -184,78 +262,94 @@ def add_job(title: str = Form(...), company: str = Form(""), url: str = Form("")
     if safe_url(url) == "#":
         url = ""
     ext_id = url or hashlib.sha1((title + company + description[:200]).encode()).hexdigest()
-    jid = db.insert_job({
+    jid, _new = db.upsert_job({
         "source": "manual", "ext_id": ext_id, "title": title, "company": company.strip()[:120],
         "url": url, "location": "", "tags": [], "description": description, "salary": "",
         "posted_at": db.now(),
-    }, title_hit=1)
-    if not jid:
-        return back("/", "Essa vaga já estava cadastrada.")
-    pipeline.score_one_in_background(jid)
-    return back(f"/vaga/{jid}", "Vaga adicionada. A análise aparece em alguns segundos (atualize a página).")
+    }, owner_id=user["id"])
+    if not db.link(user["id"], jid, title_hit=1):
+        return back(f"/vaga/{jid}", "Essa vaga já estava na sua lista.")
+    pipeline.score_one_in_background(user["id"], jid)
+    return back(f"/vaga/{jid}", "Vaga adicionada. A análise aparece em alguns segundos (recarregue a página).")
 
 
-@router.get("/vaga/{jid}")
-def job_page(request: Request, jid: str):
-    return page(request, "job.html", job=job_or_404(jid), statuses=db.STATUSES,
-                min_score=config.load_config().min_score,
-                events=db.recent_events(30, jid))
+@app.get("/vaga/{jid}")
+def job_page(request: Request, jid: str, user: dict = Depends(current_user)):
+    return page(request, "job.html", user, job=job_or_404(user["id"], jid), statuses=db.STATUSES,
+                min_score=user["min_score"], events=db.recent_events(user["id"], 30, jid))
 
 
-@router.post("/vaga/{jid}/status")
-def job_status(jid: str, status: str = Form(...)):
-    job_or_404(jid)
+@app.post("/vaga/{jid}/status")
+def job_status(jid: str, status: str = Form(...), user: dict = Depends(current_user)):
+    job_or_404(user["id"], jid)
     if status not in db.STATUSES:
         raise HTTPException(400, "Status inválido")
-    db.set_status(jid, status)
+    db.set_status(user["id"], jid, status)
     return back(f"/vaga/{jid}", f"Status alterado para: {db.STATUSES[status]}.")
 
 
-@router.post("/vaga/{jid}/notas")
-def job_notes(jid: str, notes: str = Form("")):
-    job_or_404(jid)
-    db.set_notes(jid, notes[:5000])
+@app.post("/vaga/{jid}/notas")
+def job_notes(jid: str, notes: str = Form(""), user: dict = Depends(current_user)):
+    job_or_404(user["id"], jid)
+    db.set_notes(user["id"], jid, notes[:5000])
     return back(f"/vaga/{jid}", "Anotações salvas.")
 
 
-@router.post("/vaga/{jid}/gerar")
-def job_generate(jid: str):
-    job_or_404(jid)
+@app.post("/vaga/{jid}/gerar")
+def job_generate(jid: str, user: dict = Depends(current_user)):
+    job_or_404(user["id"], jid)
     try:
-        pipeline.tailor(jid)
+        pipeline.tailor(user["id"], jid)
     except llm.LLMError as e:
         return back(f"/vaga/{jid}", f"Não consegui gerar o currículo: {e}")
     return back(f"/vaga/{jid}", "Currículo e carta gerados. Revise antes de enviar.")
 
 
-@router.post("/vaga/{jid}/documentos")
-def job_docs(jid: str, cv_md: str = Form(""), cover_md: str = Form("")):
-    job_or_404(jid)
-    db.save_docs(jid, cv_md[:20000], cover_md[:8000])
+@app.post("/vaga/{jid}/documentos")
+def job_docs(jid: str, cv_md: str = Form(""), cover_md: str = Form(""), user: dict = Depends(current_user)):
+    job_or_404(user["id"], jid)
+    db.save_docs(user["id"], jid, cv_md[:20000], cover_md[:8000])
     return back(f"/vaga/{jid}", "Documentos salvos.")
 
 
-@router.get("/vaga/{jid}/imprimir")
-def job_print(request: Request, jid: str, doc: str = "cv"):
-    job = job_or_404(jid)
+@app.get("/vaga/{jid}/imprimir")
+def job_print(request: Request, jid: str, doc: str = "cv", user: dict = Depends(current_user)):
+    job = job_or_404(user["id"], jid)
     text = job["cover_md"] if doc == "carta" else job["cv_md"]
     if not text:
         raise HTTPException(404, "Documento ainda não gerado")
     return templates.TemplateResponse(request, "print.html", {"job": job, "body": render_markdown(text)})
 
 
-@router.get("/perfil")
-def profile_page(request: Request):
+@app.get("/perfil")
+def profile_page(request: Request, user: dict = Depends(current_user)):
     example = Path(config.ROOT / "profile.example.md")
-    return page(request, "profile.html", profile=config.read_profile(),
+    accounts = db.all_users() if user["is_admin"] else []
+    return page(request, "profile.html", user,
                 example=example.read_text(encoding="utf-8") if example.exists() else "",
-                preferences=config.load_config().preferences)
+                accounts=[{"name": a["name"], "email": a["email"], "created_at": a["created_at"]}
+                          for a in accounts],
+                invite_on=bool(auth.invite_code()))
 
 
-@router.post("/perfil")
-def profile_save(profile: str = Form("")):
-    config.write_profile(profile[:30000])
-    return back("/perfil", "Perfil salvo. Ele será usado nas próximas análises e currículos.")
+@app.post("/perfil")
+def profile_save(name: str = Form(...), profile: str = Form(""), preferences: str = Form(""),
+                 keywords: str = Form(""), exclude_title: str = Form(""), min_score: int = Form(60),
+                 user: dict = Depends(current_user)):
+    db.update_user(
+        user["id"], name=" ".join(name.split())[:80] or user["name"], profile=profile.strip()[:30000],
+        preferences=preferences.strip()[:3000], keywords=keywords.strip()[:3000],
+        exclude_title=exclude_title.strip()[:3000], min_score=max(0, min(100, min_score)))
+    pipeline.refresh_in_background(user["id"])
+    return back("/perfil", "Perfil salvo. As vagas estão sendo reavaliadas com os novos dados.")
 
 
-app.include_router(router)
+@app.post("/perfil/senha")
+def change_password(request: Request, current: str = Form(...), new: str = Form(...),
+                    user: dict = Depends(current_user)):
+    if not auth.verify_password(current, user["password_hash"]):
+        return back("/perfil", "A senha atual está incorreta.")
+    if len(new) < auth.MIN_PASSWORD or len(new) > 200:
+        return back("/perfil", f"A nova senha precisa ter pelo menos {auth.MIN_PASSWORD} caracteres.")
+    db.set_password(user["id"], auth.hash_password(new), keep_token=request.cookies.get(auth.SESSION_COOKIE))
+    return back("/perfil", "Senha alterada. As outras sessões desta conta foram encerradas.")

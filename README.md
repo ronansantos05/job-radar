@@ -6,8 +6,8 @@
 
 > **EN:** A self-hosted job-hunting assistant. It collects remote jobs from public APIs, scores each
 > one against your profile with an LLM (Groq), writes a tailored résumé and cover letter using only
-> facts from your profile, and tracks every application in a password-protected dashboard.
-> FastAPI + SQLite + Docker; runs on any small VPS.
+> facts from your profile, and tracks every application in a dashboard. Multi-user: each account has
+> its own isolated profile, preferences, scores and documents. FastAPI + SQLite + Docker.
 
 Assistente de busca de trabalho remoto que roda na sua própria VPS:
 
@@ -18,6 +18,8 @@ Assistente de busca de trabalho remoto que roda na sua própria VPS:
    no seu perfil. Nada é inventado.
 4. **Acompanha tudo num dashboard**: o que foi coletado, analisado, o que já tem currículo, o que foi
    submetido, entrevistas e recusas, com histórico e anotações por vaga.
+5. **Várias pessoas, dados separados**: cada conta tem perfil, preferências, notas, currículos e
+   anotações próprios. Ninguém vê os dados de outra pessoa, nem quem administra o painel.
 
 O envio da candidatura é sempre seu: o sistema prepara, você revisa e clica. Automatizar o envio viola
 os termos de sites como o LinkedIn e costuma terminar em conta bloqueada.
@@ -37,7 +39,8 @@ fontes (APIs/RSS) ─► filtro por palavras-chave ─► LLM dá a nota ─► 
 | Coletores (Remotive, RemoteOK, Himalayas, Jobicy, We Work Remotely) | `app/sources.py` |
 | Filtro, nota e currículo adaptado | `app/pipeline.py` |
 | Cliente da Groq (API compatível com OpenAI) | `app/llm.py` |
-| Banco SQLite (vagas, histórico, rodadas) | `app/db.py` |
+| Contas, senhas e sessões | `app/auth.py` |
+| Banco SQLite (catálogo de vagas compartilhado; todo o resto por usuário) | `app/db.py` |
 | Dashboard e agendador | `app/main.py`, `app/templates/` |
 
 Vagas do **LinkedIn**, de e-mail ou de indicação entram pelo botão **“Adicionar uma vaga à mão”**: você
@@ -49,9 +52,10 @@ Este repositório é público, então os seus dados ficam fora dele:
 
 | Dado | Onde fica | Protegido por |
 |---|---|---|
-| Seu perfil (bio, experiência, contatos) | `data/profile.md` (editável pelo dashboard) | `.gitignore` |
-| Banco com vagas, currículos e anotações | `data/jobs.db` | `.gitignore` |
-| Chave da Groq e senha do dashboard | `.env` | `.gitignore` |
+| Perfis, vagas, currículos e anotações de cada conta | `data/radar.db` | `.gitignore` |
+| Chave da Groq e código de convite | `.env` (ou variáveis do painel de deploy) | `.gitignore` |
+
+As senhas são guardadas só como hash (scrypt) e as sessões só como hash do token.
 
 O `config.yaml` é versionado: coloque nele só preferências de busca, nunca dados pessoais.
 
@@ -60,18 +64,27 @@ O `config.yaml` é versionado: coloque nele só preferências de busca, nunca da
 ```bash
 python -m venv .venv && source .venv/bin/activate   # Windows: .venv\Scripts\activate
 pip install -r requirements.txt
-cp .env.example .env        # preencha GROQ_API_KEY e DASH_PASSWORD
+cp .env.example .env        # preencha GROQ_API_KEY e SIGNUP_CODE
 uvicorn app.main:app --port 8000
 ```
 
-Abra <http://localhost:8000>, entre com o usuário e a senha do `.env`, vá em **Perfil**, escreva o seu
-perfil e clique em **Atualizar agora**.
+Abra <http://localhost:8000>, clique em **Criar conta**, escreva o seu perfil e clique em **Atualizar agora**.
+
+## Contas e convites
+
+- A **primeira conta criada vira administradora**. Crie a sua logo depois de subir o sistema.
+- Para outras pessoas se cadastrarem, defina `SIGNUP_CODE` e passe o código para elas. Sem essa variável,
+  o cadastro fica fechado depois da primeira conta.
+- Todas as contas usam a mesma chave da Groq (a do servidor). O limite de análises por rodada
+  (`max_scored_per_run`) vale por pessoa.
+- Cada pessoa define, na página **Perfil**, o próprio perfil, as preferências, as palavras-chave e a
+  nota mínima. O `config.yaml` só fornece os valores iniciais de uma conta nova.
 
 ## Colocando na VPS (Docker)
 
 ```bash
 git clone https://github.com/ronansantos05/job-radar.git && cd job-radar
-cp .env.example .env && nano .env      # GROQ_API_KEY, DASH_PASSWORD (longa!) e, se tiver, DOMAIN
+cp .env.example .env && nano .env      # GROQ_API_KEY, SIGNUP_CODE e, se tiver, DOMAIN
 ```
 
 Escolha **uma** forma de acessar:
@@ -95,6 +108,10 @@ Funciona, mas a senha trafega sem criptografia: use só para testar.
 
 Os dados ficam no volume `radar_data`. Para atualizar: `git pull && docker compose up -d --build`.
 
+**Easypanel, Coolify e parecidos:** crie um app a partir deste repositório com build por `Dockerfile`,
+defina `GROQ_API_KEY` e `SIGNUP_CODE` nas variáveis, monte um **volume** em `/app/data` e aponte o domínio
+para a porta `8000`. O HTTPS fica por conta do painel.
+
 ## Uso no dia a dia
 
 1. Abra a aba **Compatíveis**: as vagas já vêm ordenadas pela nota.
@@ -108,11 +125,8 @@ Os dados ficam no volume `radar_data`. Para atualizar: `git pull && docker compo
 
 | Campo | O que faz |
 |---|---|
-| `preferences` | Texto livre que o modelo usa na nota. Diga o que é eliminatório para você |
-| `keywords` | A vaga precisa ter pelo menos uma (título, tags ou descrição) para ser analisada |
-| `exclude_title` | Palavras no título que descartam a vaga sem gastar chamada do modelo |
+| `preferences`, `keywords`, `exclude_title`, `min_score` | Valores iniciais de uma conta nova (cada pessoa edita os seus em **Perfil**) |
 | `max_age_days` | Ignora vagas mais antigas que isso |
-| `min_score` | Nota a partir da qual a vaga aparece em “Compatíveis” |
 | `max_scored_per_run` | Limite de análises por rodada (protege a cota gratuita da Groq) |
 | `interval_hours` | Intervalo entre as coletas |
 | `sources` | Fontes ativas |
@@ -122,7 +136,10 @@ O modelo é escolhido no `.env` (`GROQ_MODEL`). Qualquer API compatível com Ope
 
 ## Segurança
 
-- Dashboard com login (HTTP Basic); sem `DASH_PASSWORD` o app gera uma senha temporária em vez de abrir.
+- Login por e-mail e senha, com senhas em hash scrypt, cookie de sessão `HttpOnly` e bloqueio temporário
+  depois de várias tentativas erradas.
+- **Isolamento por conta**: toda consulta de vaga, nota, currículo, anotação e perfil é filtrada pelo
+  usuário logado; vagas adicionadas à mão só existem para quem as adicionou. Há testes automáticos disso.
 - Proteção contra CSRF nos formulários e cabeçalhos restritivos (CSP sem scripts, `noindex`).
 - O texto das vagas é tratado como **dado não confiável**: é isolado nos prompts, a resposta do modelo
   é validada e o Markdown gerado é sanitizado antes de virar HTML.

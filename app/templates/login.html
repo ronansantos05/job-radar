@@ -1,0 +1,14 @@
+{% extends "base.html" %}
+{% block title %}Entrar · job-radar{% endblock %}
+{% block content %}
+<div class="card narrow">
+  <h1>Entrar</h1>
+  <p class="muted small">Seu radar de vagas remotas, com currículo adaptado a cada uma.</p>
+  <form method="post" action="/entrar">
+    <label>E-mail</label><input type="email" name="email" required autofocus autocomplete="username">
+    <label>Senha</label><input type="password" name="password" required autocomplete="current-password">
+    <p><button class="primary">Entrar</button></p>
+  </form>
+  {% if signup_allowed %}<p class="small">Ainda não tem conta? <a href="/cadastro">Criar conta</a></p>{% endif %}
+</div>
+{% endblock %}

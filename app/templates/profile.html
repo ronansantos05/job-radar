@@ -2,20 +2,26 @@
 {% block title %}Perfil · job-radar{% endblock %}
 {% block content %}
 <h1>Seu perfil</h1>
-<p class="muted">Descreva aqui quem você é: é a única fonte de verdade do sistema. As notas das vagas e os currículos adaptados usam <b>somente</b> o que estiver escrito abaixo; nada é inventado. Quanto mais completo e concreto (projetos, resultados, tecnologias), melhores os currículos.</p>
-<p class="muted small">Este texto fica salvo só no servidor, em <code>data/profile.md</code>, que nunca vai para o Git.</p>
+<p class="muted">É a única fonte de verdade do sistema: as notas das vagas e os currículos adaptados usam <b>somente</b> o que estiver escrito aqui, nada é inventado. Quanto mais concreto (projetos, resultados, tecnologias), melhores os currículos. Só você vê estes dados.</p>
+<form method="post" action="/perfil">
 <div class="grid2">
   <div class="card">
-    <form method="post" action="/perfil">
-      <textarea name="profile" rows="30" placeholder="Escreva seu perfil em texto livre ou Markdown…">{{ profile }}</textarea>
-      <p><button class="primary">Salvar perfil</button></p>
-    </form>
+    <label>Nome</label><input type="text" name="name" value="{{ user.name }}" required maxlength="80">
+    <label>Perfil completo (texto livre ou Markdown): quem você é, contatos, experiência, projetos, formação, idiomas</label>
+    <textarea name="profile" rows="30" placeholder="Escreva seu perfil…">{{ user.profile }}</textarea>
+    <p><button class="primary">Salvar perfil e preferências</button></p>
   </div>
   <div>
     <div class="card">
-      <h2>Preferências de vaga</h2>
-      <p class="small muted">Vêm do arquivo <code>config.yaml</code> (palavras-chave, nota mínima e esta descrição):</p>
-      <pre class="desc small">{{ preferences or "(vazio)" }}</pre>
+      <h2>Que vagas você procura</h2>
+      <label>Preferências (o modelo usa este texto para dar a nota; diga o que é eliminatório)</label>
+      <textarea name="preferences" rows="7">{{ user.preferences }}</textarea>
+      <label>Palavras-chave, uma por linha (a vaga precisa ter pelo menos uma)</label>
+      <textarea name="keywords" rows="8">{{ user.keywords }}</textarea>
+      <label>Ignorar vagas com estas palavras no título, uma por linha</label>
+      <textarea name="exclude_title" rows="5">{{ user.exclude_title }}</textarea>
+      <label>Nota mínima para aparecer em “Compatíveis” (0 a 100)</label>
+      <input type="number" name="min_score" value="{{ user.min_score }}" min="0" max="100">
     </div>
     <div class="card">
       <details>
@@ -24,5 +30,27 @@
       </details>
     </div>
   </div>
+</div>
+</form>
+
+<div class="grid2">
+  <div class="card">
+    <h2>Trocar senha</h2>
+    <form method="post" action="/perfil/senha" class="row">
+      <input type="password" name="current" placeholder="Senha atual" required autocomplete="current-password" style="max-width:220px">
+      <input type="password" name="new" placeholder="Nova senha" required minlength="8" autocomplete="new-password" style="max-width:220px">
+      <button>Trocar senha</button>
+    </form>
+    <p class="muted small">Conta: {{ user.email }}</p>
+  </div>
+  {% if user.is_admin %}
+  <div class="card">
+    <h2>Contas neste painel ({{ accounts | length }})</h2>
+    <table>{% for a in accounts %}
+      <tr><td class="small">{{ a.name }}</td><td class="small muted">{{ a.email }}</td><td class="small muted">{{ a.created_at | date }}</td></tr>
+    {% endfor %}</table>
+    <p class="muted small">{% if invite_on %}Novas pessoas se cadastram em <code>/cadastro</code> com o código de convite (variável <code>SIGNUP_CODE</code>).{% else %}O cadastro está fechado. Para convidar alguém, defina a variável <code>SIGNUP_CODE</code> e passe o código para a pessoa.{% endif %} Como administrador você vê só nome e e-mail das contas, nunca o perfil ou as vagas delas.</p>
+  </div>
+  {% endif %}
 </div>
 {% endblock %}

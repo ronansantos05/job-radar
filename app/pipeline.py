@@ -1,4 +1,8 @@
-"""Coleta -> filtro por palavras-chave -> nota de compatibilidade (LLM) -> currículo adaptado."""
+"""Coleta -> filtro por palavras-chave -> nota de compatibilidade (LLM) -> currículo adaptado.
+
+O catálogo de vagas é um só; o filtro, a nota e o currículo são calculados por usuário,
+com o perfil e as preferências de cada um.
+"""
 from __future__ import annotations
 
 import logging
@@ -7,6 +11,7 @@ import re
 import threading
 import time
 import unicodedata
+from dataclasses import replace
 from datetime import datetime, timedelta, timezone
 
 from . import config, db, llm, sources
@@ -14,7 +19,8 @@ from . import config, db, llm, sources
 log = logging.getLogger(__name__)
 
 _lock = threading.Lock()
-state = {"running": False}
+state = {"running": False, "last_fetch": 0.0}
+MIN_FETCH_INTERVAL = 30 * 60  # não consulta as fontes mais de uma vez a cada 30 min
 
 CONTRACT_TYPES = {"pj", "freelance", "bolsa", "clt", "estagio", "indefinido"}
 SEPARATOR = "=====CARTA====="
@@ -113,6 +119,21 @@ def match(job: dict, cfg: config.Config) -> int | None:
     return 0 if any(has_word(k, rest) for k in cfg.keywords) else None
 
 
+def split_terms(text: str | None) -> list[str]:
+    return [t.strip() for t in re.split(r"[\n,;]+", text or "") if t.strip()]
+
+
+def user_config(user: dict, cfg: config.Config) -> config.Config:
+    """Preferências do usuário por cima dos padrões do config.yaml."""
+    return replace(
+        cfg,
+        preferences=(user.get("preferences") or "").strip() or cfg.preferences,
+        keywords=split_terms(user.get("keywords")) or cfg.keywords,
+        exclude_title=split_terms(user.get("exclude_title")),
+        min_score=int(user.get("min_score") or cfg.min_score),
+    )
+
+
 # ---------------------------------------------------------------- nota de compatibilidade
 
 def _str_list(value, limit: int = 4) -> list[str]:
@@ -146,7 +167,7 @@ def clean_verdict(data: dict) -> tuple[int, dict]:
     }
 
 
-def score_job(job: dict, profile: str, cfg: config.Config) -> int:
+def score_job(uid: int, job: dict, profile: str, cfg: config.Config) -> int:
     data = llm.chat_json(SCORE_SYSTEM, SCORE_USER.format(
         preferences=cfg.preferences or "(nenhuma informada)",
         profile=profile,
@@ -155,40 +176,53 @@ def score_job(job: dict, profile: str, cfg: config.Config) -> int:
         description=job["description"][:6000],
     ), max_tokens=700)
     score, verdict = clean_verdict(data)
-    db.save_score(job["id"], score, verdict)
+    db.save_score(uid, job["id"], score, verdict)
     return score
 
 
-def score_pending(cfg: config.Config, limit: int | None = None) -> tuple[int, list[str]]:
-    jobs = db.pending(limit or cfg.max_scored_per_run)
-    if not jobs:
-        return 0, []
-    profile = config.read_profile()
-    if not profile:
-        return 0, ["Perfil vazio: preencha a página Perfil para as vagas serem analisadas."]
-    if not llm.configured():
-        return 0, ["GROQ_API_KEY não configurada: as vagas foram coletadas, mas não analisadas."]
+def link_user(user: dict, cfg: config.Config) -> int:
+    """Põe na lista do usuário as vagas do catálogo que passam no filtro dele."""
+    ucfg = user_config(user, cfg)
+    cutoff = (datetime.now(timezone.utc) - timedelta(days=cfg.max_age_days)).isoformat(timespec="seconds")
+    linked = 0
+    for job in db.unlinked_jobs(user["id"], cutoff):
+        hit = match(job, ucfg)
+        if hit is not None and db.link(user["id"], job["id"], hit):
+            linked += 1
+    return linked
+
+
+def score_user(user: dict, cfg: config.Config) -> tuple[int, list[str], bool]:
+    """Analisa a fila de um usuário. Devolve (analisadas, erros, parar_tudo)."""
+    profile = (user.get("profile") or "").strip()
+    if not profile or not llm.configured():
+        return 0, [], False
+    ucfg = user_config(user, cfg)
     delay = float(os.getenv("LLM_DELAY_SECONDS", "2"))
     scored, errors = 0, []
-    for job in jobs:
+    for job in db.pending(user["id"], cfg.max_scored_per_run):
         try:
-            score_job(job, profile, cfg)
+            score_job(user["id"], job, profile, ucfg)
             scored += 1
         except llm.LLMError as e:
-            errors.append(f"Análise de '{job['title'][:50]}': {e}")
-            if e.fatal or len(errors) >= 5:
+            # mensagem genérica: o erro aparece para todos, não pode citar vaga de ninguém
+            errors.append(f"Análise interrompida: {e}")
+            if e.fatal:
+                return scored, errors, True
+            if len(errors) >= 3:
                 break
         time.sleep(delay)
-    return scored, errors
+    return scored, errors, False
 
 
 # ---------------------------------------------------------------- currículo adaptado
 
-def tailor(jid: str) -> None:
-    job = db.get_job(jid)
-    if not job:
+def tailor(uid: int, jid: str) -> None:
+    job = db.get_job(uid, jid)
+    user = db.get_user(uid)
+    if not job or not user:
         raise ValueError("vaga não encontrada")
-    profile = config.read_profile()
+    profile = (user.get("profile") or "").strip()
     if not profile:
         raise llm.LLMError("Perfil vazio: preencha a página Perfil antes de gerar o currículo.")
     text = llm.chat(TAILOR_SYSTEM, TAILOR_USER.format(
@@ -199,19 +233,16 @@ def tailor(jid: str) -> None:
     cv, cover = cv.strip(), cover.strip()
     if not cv:
         raise llm.LLMError("o modelo devolveu um currículo vazio")
-    db.save_docs(jid, cv, cover, generated=True)
+    db.save_docs(uid, jid, cv, cover, generated=True)
 
 
-# ---------------------------------------------------------------- rodada completa
+# ---------------------------------------------------------------- rodadas
 
-def _run() -> dict:
-    cfg = config.load_config()
-    db.init()
-    run_id = db.start_run()
+def collect(cfg: config.Config) -> tuple[int, int, list[str]]:
+    """Lê todas as fontes e grava as vagas recentes no catálogo compartilhado."""
     errors: list[str] = []
     collected = new = 0
     cutoff = (datetime.now(timezone.utc) - timedelta(days=cfg.max_age_days)).isoformat(timespec="seconds")
-
     for name in cfg.sources:
         fetch = sources.SOURCES.get(name)
         if not fetch:
@@ -229,25 +260,49 @@ def _run() -> dict:
                 continue
             if job["posted_at"] and job["posted_at"] < cutoff:
                 continue
-            hit = match(job, cfg)
-            if hit is not None and db.insert_job(job, title_hit=hit):
+            if db.upsert_job(job)[1]:
                 new += 1
+    state["last_fetch"] = time.time()
+    return collected, new, errors
 
-    scored, score_errors = score_pending(cfg)
-    errors += score_errors
-    db.finish_run(run_id, collected, new, scored, errors)
-    log.info("rodada: %d coletadas, %d novas no filtro, %d analisadas, %d erros",
+
+def _run(fetch: bool = True, only_uid: int | None = None) -> dict:
+    cfg = config.load_config()
+    db.init()
+    errors: list[str] = []
+    collected = new = scored = 0
+    run_id = db.start_run() if fetch else None
+    if fetch:
+        collected, new, errors = collect(cfg)
+        db.prune_catalog()
+    users = db.all_users()
+    if only_uid is not None:
+        users = [u for u in users if u["id"] == only_uid]
+    for user in users:
+        link_user(user, cfg)
+    if users and not llm.configured():
+        errors.append("GROQ_API_KEY não configurada: as vagas foram coletadas, mas não analisadas.")
+    else:
+        for user in users:
+            n, errs, stop = score_user(user, cfg)
+            scored += n
+            errors += errs
+            if stop:
+                break
+    if run_id:
+        db.finish_run(run_id, collected, new, scored, list(dict.fromkeys(errors)))
+    log.info("rodada: %d lidas, %d novas no catálogo, %d analisadas, %d erros",
              collected, new, scored, len(errors))
     return {"collected": collected, "new": new, "scored": scored, "errors": errors}
 
 
-def run_once() -> dict | None:
-    """Roda uma coleta completa. Devolve None se já houver uma em andamento."""
+def run_once(fetch: bool = True, only_uid: int | None = None) -> dict | None:
+    """Roda uma rodada. Devolve None se já houver uma em andamento."""
     if not _lock.acquire(blocking=False):
         return None
     state["running"] = True
     try:
-        return _run()
+        return _run(fetch, only_uid)
     except Exception:
         log.exception("rodada falhou")
         return None
@@ -256,22 +311,24 @@ def run_once() -> dict | None:
         _lock.release()
 
 
-def run_in_background() -> bool:
+def refresh_in_background(uid: int) -> bool:
+    """Botão "Atualizar agora": consulta as fontes de novo só se a última coleta não for recente."""
     if state["running"]:
         return False
-    threading.Thread(target=run_once, daemon=True).start()
+    recent = time.time() - state["last_fetch"] < MIN_FETCH_INTERVAL
+    kwargs = {"fetch": False, "only_uid": uid} if recent else {"fetch": True}
+    threading.Thread(target=run_once, kwargs=kwargs, daemon=True).start()
     return True
 
 
-def score_one_in_background(jid: str) -> None:
+def score_one_in_background(uid: int, jid: str) -> None:
     """Para vagas adicionadas à mão: analisa só aquela, sem esperar a próxima rodada."""
     def work():
-        job = db.get_job(jid)
-        profile = config.read_profile()
-        if not job or not profile or not llm.configured():
+        job, user = db.get_job(uid, jid), db.get_user(uid)
+        if not job or not user or not (user.get("profile") or "").strip() or not llm.configured():
             return
         try:
-            score_job(job, profile, config.load_config())
+            score_job(uid, job, user["profile"], user_config(user, config.load_config()))
         except llm.LLMError as e:
             log.warning("análise da vaga manual falhou: %s", e)
 

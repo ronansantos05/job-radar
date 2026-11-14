@@ -1,0 +1,20 @@
+{% extends "base.html" %}
+{% block title %}Criar conta · job-radar{% endblock %}
+{% block content %}
+<div class="card narrow">
+  <h1>Criar conta</h1>
+  {% if allowed %}
+  <p class="muted small">Cada conta tem perfil, vagas, notas e currículos próprios. Ninguém vê os dados de outra pessoa.</p>
+  <form method="post" action="/cadastro">
+    <label>Nome</label><input type="text" name="name" required maxlength="80" autocomplete="name">
+    <label>E-mail</label><input type="email" name="email" required maxlength="254" autocomplete="username">
+    <label>Senha (mínimo de 8 caracteres)</label><input type="password" name="password" required minlength="8" maxlength="200" autocomplete="new-password">
+    {% if needs_code %}<label>Código de convite</label><input type="password" name="code" required autocomplete="off">{% endif %}
+    <p><button class="primary">Criar conta</button></p>
+  </form>
+  {% else %}
+  <p>O cadastro está fechado. Peça um convite a quem administra este painel.</p>
+  {% endif %}
+  <p class="small">Já tem conta? <a href="/entrar">Entrar</a></p>
+</div>
+{% endblock %}
