@@ -1,0 +1,19 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="robots" content="noindex, nofollow">
+<title>{{ job.title }}</title>
+<style>
+body{font:11pt/1.45 Georgia,"Times New Roman",serif;color:#111;background:#fff;max-width:780px;margin:32px auto;padding:0 24px}
+h1{font-size:20pt;margin:0 0 4px} h2{font-size:12.5pt;border-bottom:1px solid #999;padding-bottom:2px;margin:16px 0 6px}
+h3{font-size:11pt;margin:10px 0 2px} p{margin:4px 0} ul{margin:4px 0;padding-left:18px} a{color:#111}
+.hint{font:10pt system-ui,sans-serif;color:#666;border:1px dashed #bbb;padding:8px 12px;border-radius:6px;margin-bottom:20px}
+@media print{.hint{display:none} body{margin:0;max-width:none;padding:0} @page{margin:16mm}}
+</style>
+</head>
+<body>
+<div class="hint">Use Ctrl+P e escolha “Salvar como PDF”. Este aviso não aparece na impressão.</div>
+{{ body | safe }}
+</body>
+</html>

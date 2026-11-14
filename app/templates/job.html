@@ -1,0 +1,82 @@
+{% extends "base.html" %}
+{% block title %}{{ job.title }} · job-radar{% endblock %}
+{% block content %}
+<p class="small"><a href="/">← Voltar para as vagas</a></p>
+<div class="card">
+  <div class="row" style="justify-content:space-between;align-items:flex-start">
+    <div>
+      <h1>{{ job.title }}</h1>
+      <div class="muted">{{ job.company or "empresa não informada" }} · {{ job.location or "local não informado" }}{% if job.salary %} · {{ job.salary }}{% endif %}</div>
+      <div class="small muted">Fonte: {{ job.source }} · publicada em {{ job.posted_at | date }} · status: <b>{{ job.status_label }}</b>{% if job.applied_at %} · submetida em {{ job.applied_at | date }}{% endif %}</div>
+    </div>
+    <div>{% if job.score is none %}<span class="score s-none">sem nota</span>
+      {% else %}<span class="score {% if job.score >= 75 %}s-good{% elif job.score >= min_score %}s-mid{% else %}s-bad{% endif %}" style="font-size:22px">{{ job.score }}</span>{% endif %}</div>
+  </div>
+  <p style="margin:12px 0 0">{% for t in job.tags %}<span class="chip">{{ t }}</span>{% endfor %}</p>
+  <div class="row" style="margin-top:10px">
+    {% if job.url | safe_url != "#" %}<a class="btn primary" href="{{ job.url | safe_url }}" target="_blank" rel="noopener noreferrer">Abrir a vaga ↗</a>{% endif %}
+    <form method="post" action="/vaga/{{ job.id }}/gerar"><button>{% if job.cv_md %}Gerar currículo de novo{% else %}Gerar currículo adaptado{% endif %}</button></form>
+    <form method="post" action="/vaga/{{ job.id }}/status" class="row">
+      <select name="status" style="width:auto">
+        {% for key, label in statuses.items() %}<option value="{{ key }}" {% if key == job.status %}selected{% endif %}>{{ label }}</option>{% endfor %}
+      </select>
+      <button>Mudar status</button>
+    </form>
+    {% if job.status != "submetida" %}
+    <form method="post" action="/vaga/{{ job.id }}/status"><input type="hidden" name="status" value="submetida"><button>✔ Marcar como submetida</button></form>
+    {% endif %}
+  </div>
+</div>
+
+<div class="grid2">
+  <div>
+    {% if job.verdict %}
+    <div class="card">
+      <h2>Análise de compatibilidade</h2>
+      <p>{{ job.verdict.resumo }}</p>
+      <p><span class="chip">contrato: {{ job.verdict.tipo_contrato }}</span>
+         <span class="chip">remoto: {% if job.verdict.remoto is none %}?{% elif job.verdict.remoto %}sim{% else %}não{% endif %}</span>
+         <span class="chip">aceita seu país: {% if job.verdict.aceita_pais is none %}?{% elif job.verdict.aceita_pais %}sim{% else %}não{% endif %}</span>
+         {% if job.verdict.idioma %}<span class="chip">idioma: {{ job.verdict.idioma }}</span>{% endif %}</p>
+      {% if job.verdict.pontos_fortes %}<b class="small">Pontos fortes</b><ul class="clean">{% for p in job.verdict.pontos_fortes %}<li>{{ p }}</li>{% endfor %}</ul>{% endif %}
+      {% if job.verdict.lacunas %}<b class="small">Lacunas</b><ul class="clean">{% for p in job.verdict.lacunas %}<li>{{ p }}</li>{% endfor %}</ul>{% endif %}
+    </div>
+    {% endif %}
+
+    {% if job.cv_md %}
+    <div class="card">
+      <h2>Currículo e carta adaptados</h2>
+      <p class="muted small">Gerados só com o que está no seu perfil. Revise e edite à vontade antes de enviar.</p>
+      <form method="post" action="/vaga/{{ job.id }}/documentos">
+        <label>Currículo (Markdown)</label><textarea name="cv_md" rows="22">{{ job.cv_md }}</textarea>
+        <label>Carta de apresentação</label><textarea name="cover_md" rows="9">{{ job.cover_md or "" }}</textarea>
+        <p class="row"><button class="primary">Salvar edições</button>
+          <a class="btn" href="/vaga/{{ job.id }}/imprimir?doc=cv" target="_blank" rel="noopener">Currículo para imprimir / PDF</a>
+          {% if job.cover_md %}<a class="btn" href="/vaga/{{ job.id }}/imprimir?doc=carta" target="_blank" rel="noopener">Carta para imprimir / PDF</a>{% endif %}</p>
+      </form>
+    </div>
+    {% endif %}
+
+    <div class="card">
+      <h2>Descrição da vaga</h2>
+      <pre class="desc">{{ job.description }}</pre>
+    </div>
+  </div>
+
+  <div>
+    <div class="card">
+      <h2>Anotações</h2>
+      <form method="post" action="/vaga/{{ job.id }}/notas">
+        <textarea name="notes" rows="6" placeholder="Contato do recrutador, data da entrevista, pretensão…">{{ job.notes or "" }}</textarea>
+        <p><button>Salvar anotações</button></p>
+      </form>
+    </div>
+    <div class="card">
+      <h2>Histórico</h2>
+      <table>{% for e in events %}
+        <tr><td class="small muted" style="white-space:nowrap">{{ e.at | datetime }}</td><td class="small">{{ e.kind }}{% if e.detail %}: {{ e.detail }}{% endif %}</td></tr>
+      {% endfor %}</table>
+    </div>
+  </div>
+</div>
+{% endblock %}

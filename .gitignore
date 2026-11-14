@@ -1,0 +1,17 @@
+# Dados privados: nunca versionar
+.env
+data/
+profile.md
+*.db
+*.db-journal
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
+.pytest_cache/
+
+# Editores
+.idea/
+.vscode/

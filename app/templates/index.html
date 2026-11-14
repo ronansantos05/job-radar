@@ -1,0 +1,81 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="stats">
+  <div class="stat"><b>{{ counts.coletadas }}</b><span class="muted small">vagas coletadas</span></div>
+  <div class="stat"><b>{{ counts.analisadas }}</b><span class="muted small">analisadas</span></div>
+  <div class="stat"><b>{{ counts.compativeis }}</b><span class="muted small">compatíveis (nota ≥ {{ min_score }})</span></div>
+  <div class="stat"><b>{{ counts.curriculo }}</b><span class="muted small">com currículo pronto</span></div>
+  <div class="stat"><b>{{ counts.ja_submetidas }}</b><span class="muted small">submetidas no total</span></div>
+  <div class="stat"><b>{{ counts.entrevistas }}</b><span class="muted small">entrevistas / ofertas</span></div>
+</div>
+
+<div class="card">
+  <div class="tabs">
+    {% for key, (label, _w) in views.items() %}
+      <a class="tab {% if key == view %}on{% endif %}" href="/?view={{ key }}">{{ label }} · {{ counts[key] }}</a>
+    {% endfor %}
+  </div>
+  <form method="get" action="/" class="row" style="margin-bottom:10px">
+    <input type="hidden" name="view" value="{{ view }}">
+    <input type="search" name="q" value="{{ q }}" placeholder="Buscar por título, empresa ou tag" style="max-width:340px">
+    <button>Buscar</button>
+  </form>
+  {% if jobs %}
+  <div class="tablewrap"><table>
+    <tr><th>Nota</th><th>Vaga</th><th>Contrato</th><th>Local</th><th>Fonte</th><th>Publicada</th><th>Status</th></tr>
+    {% for j in jobs %}
+    <tr>
+      <td>{% if j.score is none %}<span class="score s-none">–</span>
+          {% else %}<span class="score {% if j.score >= 75 %}s-good{% elif j.score >= min_score %}s-mid{% else %}s-bad{% endif %}">{{ j.score }}</span>{% endif %}</td>
+      <td><a href="/vaga/{{ j.id }}"><b>{{ j.title }}</b></a><br><span class="muted small">{{ j.company or "empresa não informada" }}{% if j.salary %} · {{ j.salary }}{% endif %}</span></td>
+      <td>{{ j.verdict.tipo_contrato or "–" }}</td>
+      <td class="small">{{ (j.location or "–")[:40] }}</td>
+      <td class="small">{{ j.source }}</td>
+      <td class="small">{{ j.posted_at | date }}</td>
+      <td class="small">{{ j.status_label }}</td>
+    </tr>
+    {% endfor %}
+  </table></div>
+  {% else %}
+  <p class="muted">Nenhuma vaga nesta aba ainda.{% if counts.coletadas == 0 %} Clique em <b>Atualizar agora</b> para fazer a primeira coleta.{% endif %}</p>
+  {% endif %}
+</div>
+
+<div class="grid2">
+  <div class="card">
+    <details>
+      <summary>Adicionar uma vaga à mão (LinkedIn, e-mail, indicação…)</summary>
+      <p class="muted small">Cole o texto da vaga. Ela entra na fila, recebe nota e pode ganhar currículo adaptado como as outras.</p>
+      <form method="post" action="/adicionar">
+        <label>Título da vaga</label><input type="text" name="title" required maxlength="200">
+        <label>Empresa</label><input type="text" name="company" maxlength="120">
+        <label>Link da vaga</label><input type="url" name="url" maxlength="500" placeholder="https://">
+        <label>Descrição completa</label><textarea name="description" rows="8" required></textarea>
+        <p><button class="primary">Adicionar e analisar</button></p>
+      </form>
+    </details>
+  </div>
+  <div class="card">
+    <h2>Última coleta</h2>
+    {% if last_run %}
+      <p class="small">{{ last_run.finished_at | datetime }}<br>
+      {{ last_run.collected }} vagas lidas · {{ last_run.new }} novas no filtro · {{ last_run.scored }} analisadas</p>
+      {% if last_run.errors %}<p class="small" style="color:var(--mid)">{{ last_run.errors | replace("\n", " · ") }}</p>{% endif %}
+    {% else %}<p class="muted small">Ainda não houve coleta.</p>{% endif %}
+    <p class="muted small">Modelo: {{ model }}</p>
+  </div>
+</div>
+
+<div class="card">
+  <h2>Atividade recente</h2>
+  {% if events %}
+  <table>
+    {% for e in events %}
+    <tr><td class="small muted" style="white-space:nowrap">{{ e.at | datetime }}</td>
+        <td class="small">{{ e.kind }}{% if e.detail %}: {{ e.detail }}{% endif %}</td>
+        <td class="small"><a href="/vaga/{{ e.job_id }}">{{ e.title }}</a> <span class="muted">{{ e.company }}</span></td></tr>
+    {% endfor %}
+  </table>
+  {% else %}<p class="muted small">Nada por aqui ainda.</p>{% endif %}
+</div>
+{% endblock %}

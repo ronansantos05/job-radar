@@ -1,0 +1,28 @@
+{% extends "base.html" %}
+{% block title %}Perfil · job-radar{% endblock %}
+{% block content %}
+<h1>Seu perfil</h1>
+<p class="muted">Descreva aqui quem você é: é a única fonte de verdade do sistema. As notas das vagas e os currículos adaptados usam <b>somente</b> o que estiver escrito abaixo; nada é inventado. Quanto mais completo e concreto (projetos, resultados, tecnologias), melhores os currículos.</p>
+<p class="muted small">Este texto fica salvo só no servidor, em <code>data/profile.md</code>, que nunca vai para o Git.</p>
+<div class="grid2">
+  <div class="card">
+    <form method="post" action="/perfil">
+      <textarea name="profile" rows="30" placeholder="Escreva seu perfil em texto livre ou Markdown…">{{ profile }}</textarea>
+      <p><button class="primary">Salvar perfil</button></p>
+    </form>
+  </div>
+  <div>
+    <div class="card">
+      <h2>Preferências de vaga</h2>
+      <p class="small muted">Vêm do arquivo <code>config.yaml</code> (palavras-chave, nota mínima e esta descrição):</p>
+      <pre class="desc small">{{ preferences or "(vazio)" }}</pre>
+    </div>
+    <div class="card">
+      <details>
+        <summary>Ver um modelo de perfil</summary>
+        <pre class="desc small" style="margin-top:10px">{{ example }}</pre>
+      </details>
+    </div>
+  </div>
+</div>
+{% endblock %}

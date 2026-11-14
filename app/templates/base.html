@@ -1,0 +1,70 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex, nofollow">
+<title>{% block title %}job-radar{% endblock %}</title>
+<style>
+:root{--bg:#f6f7f9;--card:#fff;--text:#1c2330;--muted:#667085;--line:#e3e6eb;--accent:#2f6fed;
+  --good:#12805c;--mid:#b26a00;--bad:#b42318;--chip:#eef1f6}
+@media (prefers-color-scheme:dark){:root{--bg:#12151b;--card:#1b1f27;--text:#e8ebf0;--muted:#98a2b3;
+  --line:#2c323d;--accent:#7aa5ff;--good:#4cc38a;--mid:#f0b357;--bad:#f97066;--chip:#262c37}}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--text);font:15px/1.5 system-ui,-apple-system,Segoe UI,Roboto,sans-serif}
+a{color:var(--accent);text-decoration:none} a:hover{text-decoration:underline}
+header{background:var(--card);border-bottom:1px solid var(--line)}
+.wrap{max-width:1180px;margin:0 auto;padding:0 16px}
+.top{display:flex;align-items:center;gap:20px;height:56px}
+.brand{font-weight:700;font-size:17px;color:var(--text)}
+nav{display:flex;gap:16px;flex:1}
+main{padding:20px 0 60px}
+h1{font-size:22px;margin:0 0 4px} h2{font-size:16px;margin:0 0 10px}
+.muted{color:var(--muted)} .small{font-size:13px}
+.card{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:16px;margin-bottom:16px}
+.banner{border-radius:10px;padding:10px 14px;margin-bottom:14px;border:1px solid var(--line);background:var(--card)}
+.banner.warn{border-color:var(--mid)} .banner.ok{border-color:var(--good)}
+.stats{display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:12px;margin-bottom:16px}
+.stat{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:12px 14px}
+.stat b{display:block;font-size:26px;line-height:1.2}
+.tabs{display:flex;flex-wrap:wrap;gap:6px;margin-bottom:12px}
+.tab{padding:6px 12px;border-radius:999px;background:var(--chip);color:var(--text);font-size:14px}
+.tab.on{background:var(--accent);color:#fff}
+.tablewrap{overflow-x:auto}
+table{width:100%;border-collapse:collapse}
+th,td{text-align:left;padding:9px 10px;border-bottom:1px solid var(--line);vertical-align:top}
+th{font-size:12px;text-transform:uppercase;letter-spacing:.04em;color:var(--muted);font-weight:600}
+.score{display:inline-block;min-width:38px;text-align:center;padding:2px 8px;border-radius:6px;font-weight:700;color:#fff}
+.s-good{background:var(--good)} .s-mid{background:var(--mid)} .s-bad{background:var(--bad)} .s-none{background:var(--muted)}
+.chip{display:inline-block;background:var(--chip);border-radius:6px;padding:1px 8px;font-size:12px;margin:0 4px 4px 0}
+button,.btn{font:inherit;cursor:pointer;border:1px solid var(--line);background:var(--card);color:var(--text);
+  border-radius:8px;padding:7px 12px;display:inline-block}
+button.primary,.btn.primary{background:var(--accent);border-color:var(--accent);color:#fff}
+button:hover,.btn:hover{filter:brightness(1.07);text-decoration:none}
+input[type=text],input[type=url],input[type=search],textarea,select{font:inherit;width:100%;padding:8px 10px;
+  border:1px solid var(--line);border-radius:8px;background:var(--bg);color:var(--text)}
+textarea{font-family:ui-monospace,Consolas,monospace;font-size:13px;line-height:1.45}
+label{display:block;font-size:13px;color:var(--muted);margin:10px 0 4px}
+.row{display:flex;gap:10px;flex-wrap:wrap;align-items:center}
+.grid2{display:grid;grid-template-columns:2fr 1fr;gap:16px} @media (max-width:860px){.grid2{grid-template-columns:1fr}}
+pre.desc{white-space:pre-wrap;word-wrap:break-word;font:inherit;margin:0;max-height:520px;overflow:auto}
+ul.clean{margin:4px 0 10px;padding-left:18px}
+details summary{cursor:pointer;font-weight:600}
+</style>
+</head>
+<body>
+<header><div class="wrap top">
+  <a class="brand" href="/">📡 job-radar</a>
+  <nav><a href="/">Vagas</a><a href="/perfil">Perfil</a></nav>
+  <form method="post" action="/atualizar">
+    <button {% if running %}disabled{% endif %}>{% if running %}Coletando…{% else %}Atualizar agora{% endif %}</button>
+  </form>
+</div></header>
+<main><div class="wrap">
+  {% if msg %}<div class="banner ok">{{ msg }}</div>{% endif %}
+  {% if not has_profile %}<div class="banner warn">Seu perfil está vazio. <a href="/perfil">Preencha o perfil</a> para as vagas serem analisadas.</div>{% endif %}
+  {% if not has_key %}<div class="banner warn">A chave da Groq não está configurada (<code>GROQ_API_KEY</code> no arquivo <code>.env</code>). As vagas são coletadas, mas não analisadas.</div>{% endif %}
+  {% block content %}{% endblock %}
+</div></main>
+</body>
+</html>

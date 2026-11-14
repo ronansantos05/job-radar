@@ -1,0 +1,45 @@
+# Preferências de busca. Este arquivo é público: não coloque dados pessoais nem senhas aqui.
+# (Seu perfil fica em data/profile.md e as chaves no .env; os dois ficam fora do Git.)
+
+# Texto livre que o modelo usa para dar a nota. Diga o que é eliminatório para você.
+preferences: |
+  Procuro trabalho 100% remoto, que aceite candidatos no Brasil (ou no mundo todo / América Latina).
+  Prefiro contrato PJ, freelance, por projeto ou bolsa de pesquisa. Vagas no exterior pagas em dólar
+  como contractor são bem-vindas. Vagas que exigem CLT presencial ou híbrido são eliminatórias.
+  Áreas: programação em Python, machine learning, redes neurais, ciência de dados, automação e LLMs.
+
+# A vaga precisa ter pelo menos uma destas palavras (título, tags ou descrição) para ir ao modelo.
+keywords:
+  - python
+  - machine learning
+  - deep learning
+  - neural network
+  - data scientist
+  - data science
+  - ml engineer
+  - ai engineer
+  - llm
+  - nlp
+  - computer vision
+  - pytorch
+  - scikit-learn
+  - fastapi
+  - streamlit
+
+# Se o título tiver uma destas palavras, a vaga é ignorada sem gastar chamada do modelo.
+exclude_title:
+  - sales
+  - account executive
+  - marketing
+  - recruiter
+  - designer
+  - director
+  - vp
+  - head of
+
+max_age_days: 21          # ignora vagas mais antigas que isso
+min_score: 60             # nota a partir da qual a vaga aparece em "Compatíveis"
+max_scored_per_run: 40    # limite de análises por rodada (protege a cota gratuita da Groq)
+interval_hours: 6         # de quanto em quanto tempo coletar
+
+sources: [remotive, remoteok, himalayas, jobicy, weworkremotely]

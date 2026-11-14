@@ -1,0 +1,28 @@
+services:
+  app:
+    build: .
+    restart: unless-stopped
+    env_file: .env
+    volumes:
+      - radar_data:/app/data
+      - ./config.yaml:/app/config.yaml:ro
+    ports:
+      - "${BIND:-127.0.0.1}:${PORT:-8000}:8000"
+
+  # HTTPS automático com o seu domínio: docker compose --profile https up -d
+  caddy:
+    image: caddy:2
+    profiles: ["https"]
+    restart: unless-stopped
+    command: caddy reverse-proxy --from ${DOMAIN:-localhost} --to app:8000
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - caddy_data:/data
+    depends_on:
+      - app
+
+volumes:
+  radar_data:
+  caddy_data:
