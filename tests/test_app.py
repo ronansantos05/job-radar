@@ -306,3 +306,45 @@ def test_csrf_and_status_flow():
     job = db.get_job(user["id"], jid)
     assert job["status"] == "submetida" and job["applied_at"]
     assert c.post(f"/vaga/{jid}/status", data={"status": "hackeada"}).status_code == 400
+
+
+def test_photo_and_base_cv(monkeypatch):
+    ana, bia = make_user("a@example.com"), make_user("b@example.com")
+    jid = add_job_for(ana)
+    db.save_docs(ana["id"], jid, "# Ana", "Carta")
+    a, b = login("a@example.com"), login("b@example.com")
+    png = b"\x89PNG\r\n\x1a\n" + b"0" * 64
+    upload = lambda data, name="foto.png": a.post("/perfil/foto", files={"photo": (name, data, "image/png")})
+
+    # só imagem de verdade (pela assinatura) e até 2 MB
+    for bad in (b"<svg onload=alert(1)>", b"MZ" + b"0" * 64, png + b"0" * main.PHOTO_MAX):
+        assert upload(bad).status_code == 303 and not db.get_extras(ana["id"])["has_photo"]
+    assert a.get("/perfil/foto").status_code == 404
+    assert "foto=1" not in a.get(f"/vaga/{jid}").text
+
+    assert upload(png).status_code == 303
+    got = a.get("/perfil/foto")
+    assert got.content == png and got.headers["content-type"] == "image/png"
+    assert b.get("/perfil/foto").status_code == 404  # a foto é só da conta dela
+    assert "foto=1" in a.get(f"/vaga/{jid}").text and 'src="/perfil/foto"' in a.get("/perfil").text
+
+    # a foto só entra quando pedida, e nunca na carta
+    url = f"/vaga/{jid}/imprimir"
+    assert 'class="photo"' not in a.get(url).text and "Ver com foto" in a.get(url).text
+    assert '<img class="photo"' in a.get(url + "?foto=1").text
+    assert '<img class="photo"' not in a.get(url + "?doc=carta&foto=1").text
+
+    # currículo base: gerado só do perfil, por conta
+    assert a.get("/perfil/curriculo/imprimir").status_code == 404
+    seen = {}
+    monkeypatch.setattr(llm, "chat", lambda system, user, **kw: seen.update(user=user) or "# Currículo da Ana")
+    assert a.post("/perfil/curriculo/gerar").status_code == 303
+    assert "Dev Python" in seen["user"] and db.get_extras(ana["id"])["base_cv"] == "# Currículo da Ana"
+    assert "<h1>Currículo da Ana</h1>" in a.get("/perfil/curriculo/imprimir?foto=1").text
+    assert "Currículo da Ana" in a.get("/perfil").text
+    assert b.get("/perfil/curriculo/imprimir").status_code == 404 and "Currículo da Ana" not in b.get("/perfil").text
+    assert a.post("/perfil/curriculo", data={"base_cv": "# Editado"}).status_code == 303
+    assert db.get_extras(ana["id"])["base_cv"] == "# Editado" and db.get_extras(ana["id"])["has_photo"]
+
+    assert a.post("/perfil/foto/remover").status_code == 303 and a.get("/perfil/foto").status_code == 404
+    assert '<img class="photo"' not in a.get(url + "?foto=1").text

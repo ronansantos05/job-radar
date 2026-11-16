@@ -35,6 +35,39 @@
 
 <div class="grid2">
   <div class="card">
+    <h2>Currículo base</h2>
+    <p class="muted small">É o seu currículo geral, montado só com o perfil acima. Serve para você ver como o
+      perfil vira currículo. Em cada vaga o sistema escreve uma versão própria, com currículo e carta
+      adaptados àquela vaga, e você revisa antes de enviar.</p>
+    {% if extras.base_cv %}
+    <form method="post" action="/perfil/curriculo">
+      <textarea name="base_cv" rows="18">{{ extras.base_cv }}</textarea>
+      <p class="row"><button class="primary">Salvar edições</button>
+        <a class="btn" href="/perfil/curriculo/imprimir" target="_blank" rel="noopener">Ver / imprimir</a>
+        {% if extras.has_photo %}<a class="btn" href="/perfil/curriculo/imprimir?foto=1" target="_blank" rel="noopener">Ver com foto</a>{% endif %}</p>
+    </form>
+    {% endif %}
+    <form method="post" action="/perfil/curriculo/gerar">
+      <button {% if not has_profile %}disabled{% endif %}>{% if extras.base_cv %}Gerar de novo a partir do perfil{% else %}Gerar currículo base{% endif %}</button>
+      {% if not has_profile %}<span class="muted small">Salve o perfil primeiro.</span>{% endif %}
+    </form>
+  </div>
+  <div class="card">
+    <h2>Foto</h2>
+    <p class="muted small">Opcional. Só aparece quando você abre a versão “com foto” de um currículo. No Brasil
+      e em parte da Europa a foto é comum; em vagas dos EUA, Canadá e Reino Unido o usual é não enviar.</p>
+    {% if extras.has_photo %}<p><img src="/perfil/foto" alt="Sua foto" style="width:108px;height:138px;object-fit:cover;border-radius:6px;border:1px solid var(--line)"></p>{% endif %}
+    <form method="post" action="/perfil/foto" enctype="multipart/form-data" class="row">
+      <input type="file" name="photo" accept="image/jpeg,image/png,image/webp" required>
+      <button>{% if extras.has_photo %}Trocar foto{% else %}Enviar foto{% endif %}</button>
+    </form>
+    <p class="muted small">JPG, PNG ou WebP, até 2 MB. Só você vê a sua foto.</p>
+    {% if extras.has_photo %}<form method="post" action="/perfil/foto/remover"><button>Remover foto</button></form>{% endif %}
+  </div>
+</div>
+
+<div class="grid2">
+  <div class="card">
     <h2>Trocar senha</h2>
     <form method="post" action="/perfil/senha" class="row">
       <input type="password" name="current" placeholder="Senha atual" required autocomplete="current-password" style="max-width:220px">

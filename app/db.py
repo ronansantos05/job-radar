@@ -42,6 +42,8 @@ CREATE TABLE IF NOT EXISTS users(
   password_hash TEXT NOT NULL, is_admin INTEGER DEFAULT 0, created_at TEXT,
   profile TEXT DEFAULT '', preferences TEXT DEFAULT '', keywords TEXT DEFAULT '',
   exclude_title TEXT DEFAULT '', min_score INTEGER DEFAULT 60);
+CREATE TABLE IF NOT EXISTS extras(
+  user_id INTEGER PRIMARY KEY, photo BLOB, photo_mime TEXT, base_cv TEXT DEFAULT '');
 CREATE TABLE IF NOT EXISTS sessions(
   token_hash TEXT PRIMARY KEY, user_id INTEGER NOT NULL, expires_at TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS jobs(
@@ -135,6 +137,33 @@ def update_user(uid: int, *, name: str, profile: str, preferences: str, keywords
     with connect() as con:
         con.execute("UPDATE users SET name=?, profile=?, preferences=?, keywords=?, exclude_title=?, min_score=?"
                     " WHERE id=?", (name, profile, preferences, keywords, exclude_title, min_score, uid))
+
+
+def get_extras(uid: int) -> dict:
+    """Foto e currículo base ficam fora de `users` para não pesar em cada requisição."""
+    with connect() as con:
+        row = con.execute("SELECT photo IS NOT NULL AS has_photo, base_cv FROM extras WHERE user_id=?",
+                          (uid,)).fetchone()
+        return {"has_photo": bool(row and row["has_photo"]), "base_cv": (row["base_cv"] if row else "") or ""}
+
+
+def get_photo(uid: int) -> tuple[bytes, str] | None:
+    with connect() as con:
+        row = con.execute("SELECT photo, photo_mime FROM extras WHERE user_id=?", (uid,)).fetchone()
+        return (bytes(row["photo"]), row["photo_mime"]) if row and row["photo"] is not None else None
+
+
+def set_photo(uid: int, data: bytes | None, mime: str | None = None) -> None:
+    with connect() as con:
+        con.execute("INSERT INTO extras(user_id, photo, photo_mime) VALUES(?,?,?)"
+                    " ON CONFLICT(user_id) DO UPDATE SET photo=excluded.photo, photo_mime=excluded.photo_mime",
+                    (uid, data, mime))
+
+
+def set_base_cv(uid: int, text: str) -> None:
+    with connect() as con:
+        con.execute("INSERT INTO extras(user_id, base_cv) VALUES(?,?)"
+                    " ON CONFLICT(user_id) DO UPDATE SET base_cv=excluded.base_cv", (uid, text))
 
 
 def set_password(uid: int, password_hash: str, keep_token: str | None = None) -> None:

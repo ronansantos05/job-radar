@@ -95,6 +95,18 @@ Escreva, no idioma da vaga:
 Não escreva nada além disso (sem comentários, sem cercas de código).
 """
 
+BASE_USER = """PERFIL DO CANDIDATO:
+<perfil>
+{profile}
+</perfil>
+
+Escreva o currículo base desse candidato em Markdown, no idioma do perfil, sem mirar numa vaga específica:
+nome e contatos (só os que estiverem no perfil), resumo de 2 a 3 linhas, competências, experiência,
+projetos, formação e, se houver, patentes, publicações e idiomas. No máximo duas páginas.
+
+Não escreva nada além do currículo (sem comentários, sem cercas de código).
+"""
+
 
 # ---------------------------------------------------------------- filtro por palavras-chave
 
@@ -234,6 +246,17 @@ def tailor(uid: int, jid: str) -> None:
     if not cv:
         raise llm.LLMError("o modelo devolveu um currículo vazio")
     db.save_docs(uid, jid, cv, cover, generated=True)
+
+
+def base_cv(uid: int) -> None:
+    """Currículo geral, sem vaga: mostra como o perfil vira currículo antes de adaptar a cada vaga."""
+    profile = ((db.get_user(uid) or {}).get("profile") or "").strip()
+    if not profile:
+        raise llm.LLMError("Perfil vazio: preencha e salve o perfil antes de gerar o currículo.")
+    text = llm.chat(TAILOR_SYSTEM, BASE_USER.format(profile=profile), max_tokens=2600, temperature=0.3).strip()
+    if not text:
+        raise llm.LLMError("o modelo devolveu um currículo vazio")
+    db.set_base_cv(uid, text)
 
 
 # ---------------------------------------------------------------- rodadas

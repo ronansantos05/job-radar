@@ -52,7 +52,7 @@ Este repositório é público, então os seus dados ficam fora dele:
 
 | Dado | Onde fica | Protegido por |
 |---|---|---|
-| Perfis, vagas, currículos e anotações de cada conta | `data/radar.db` | `.gitignore` |
+| Perfis, fotos, vagas, currículos e anotações de cada conta | `data/radar.db` | `.gitignore` |
 | Chave da Groq e código de convite | `.env` (ou variáveis do painel de deploy) | `.gitignore` |
 
 As senhas são guardadas só como hash (scrypt) e as sessões só como hash do token.
@@ -118,8 +118,12 @@ para a porta `8000`. O HTTPS fica por conta do painel.
 2. Entre numa vaga, leia a análise (pontos fortes, lacunas, tipo de contrato) e clique em
    **Gerar currículo adaptado**.
 3. Revise e edite o texto, abra a **versão para imprimir** e salve como PDF (Ctrl+P).
+   Se você enviou uma foto em **Perfil**, há também a versão **com foto** (a foto nunca entra sozinha).
 4. Envie a candidatura no site da vaga e clique em **Marcar como submetida**.
 5. Atualize o status conforme a resposta (entrevista, oferta, recusada) e anote o que precisar.
+
+Na página **Perfil** dá para gerar o **currículo base**: o currículo geral, sem vaga, para você conferir
+como o perfil vira currículo antes de o sistema adaptar um para cada vaga.
 
 ## Configuração (`config.yaml`)
 

@@ -14,8 +14,8 @@ from pathlib import Path
 from urllib.parse import quote, urlparse
 
 import markdown as md
-from fastapi import Depends, FastAPI, Form, HTTPException, Request
-from fastapi.responses import PlainTextResponse, RedirectResponse
+from fastapi import Depends, FastAPI, File, Form, HTTPException, Request, UploadFile
+from fastapi.responses import PlainTextResponse, RedirectResponse, Response
 from fastapi.templating import Jinja2Templates
 
 from . import auth, config, db, llm, pipeline
@@ -147,6 +147,25 @@ def back(url: str, msg: str = "") -> RedirectResponse:
     if msg:
         url += ("&" if "?" in url else "?") + "msg=" + quote(msg)
     return RedirectResponse(url, status_code=303)
+
+
+PHOTO_MAX = 2 * 1024 * 1024
+PHOTO_TYPES = ((b"\xff\xd8\xff", "image/jpeg"), (b"\x89PNG\r\n\x1a\n", "image/png"))
+
+
+def photo_mime(data: bytes) -> str | None:
+    """Tipo pela assinatura do arquivo, nunca pelo nome ou pelo tipo que o navegador informa."""
+    if data[:4] == b"RIFF" and data[8:12] == b"WEBP":
+        return "image/webp"
+    return next((mime for magic, mime in PHOTO_TYPES if data.startswith(magic)), None)
+
+
+def print_page(request: Request, user: dict, title: str, text: str, with_photo, toggle_url: str = ""):
+    """Versão para imprimir. `toggle_url` vazio = documento sem opção de foto (a carta)."""
+    has_photo = db.get_extras(user["id"])["has_photo"]
+    return templates.TemplateResponse(request, "print.html", {
+        "title": title, "body": render_markdown(text), "photo": bool(with_photo) and has_photo,
+        "has_photo": has_photo, "toggle_url": toggle_url})
 
 
 def job_or_404(uid: int, jid: str) -> dict:
@@ -289,6 +308,7 @@ def add_job(title: str = Form(...), company: str = Form(""), url: str = Form("")
 @app.get("/vaga/{jid}")
 def job_page(request: Request, jid: str, user: dict = Depends(current_user)):
     return page(request, "job.html", user, job=job_or_404(user["id"], jid), statuses=db.STATUSES,
+                has_photo=db.get_extras(user["id"])["has_photo"],
                 min_score=user["min_score"], events=db.recent_events(user["id"], 30, jid))
 
 
@@ -326,19 +346,22 @@ def job_docs(jid: str, cv_md: str = Form(""), cover_md: str = Form(""), user: di
 
 
 @app.get("/vaga/{jid}/imprimir")
-def job_print(request: Request, jid: str, doc: str = "cv", user: dict = Depends(current_user)):
+def job_print(request: Request, jid: str, doc: str = "cv", foto: int = 0,
+              user: dict = Depends(current_user)):
     job = job_or_404(user["id"], jid)
     text = job["cover_md"] if doc == "carta" else job["cv_md"]
     if not text:
         raise HTTPException(404, "Documento ainda não gerado")
-    return templates.TemplateResponse(request, "print.html", {"job": job, "body": render_markdown(text)})
+    is_cv = doc != "carta"
+    return print_page(request, user, job["title"], text, foto and is_cv,
+                      f"/vaga/{jid}/imprimir?doc=cv" if is_cv else "")
 
 
 @app.get("/perfil")
 def profile_page(request: Request, user: dict = Depends(current_user)):
     example = Path(config.ROOT / "profile.example.md")
     accounts = db.all_users() if user["is_admin"] else []
-    return page(request, "profile.html", user,
+    return page(request, "profile.html", user, extras=db.get_extras(user["id"]),
                 example=example.read_text(encoding="utf-8") if example.exists() else "",
                 accounts=[{"name": a["name"], "email": a["email"], "created_at": a["created_at"]}
                           for a in accounts],
@@ -366,3 +389,54 @@ def change_password(request: Request, current: str = Form(...), new: str = Form(
         return back("/perfil", f"A nova senha precisa ter pelo menos {auth.MIN_PASSWORD} caracteres.")
     db.set_password(user["id"], auth.hash_password(new), keep_token=request.cookies.get(auth.SESSION_COOKIE))
     return back("/perfil", "Senha alterada. As outras sessões desta conta foram encerradas.")
+
+
+@app.get("/perfil/foto")
+def photo(user: dict = Depends(current_user)):
+    found = db.get_photo(user["id"])  # só a foto da própria conta
+    if not found:
+        raise HTTPException(404, "Sem foto")
+    return Response(found[0], media_type=found[1])
+
+
+@app.post("/perfil/foto")
+def photo_save(photo: UploadFile = File(...), user: dict = Depends(current_user)):
+    data = photo.file.read(PHOTO_MAX + 1)
+    if not data:
+        return back("/perfil", "Escolha um arquivo de imagem.")
+    if len(data) > PHOTO_MAX:
+        return back("/perfil", "A foto precisa ter no máximo 2 MB.")
+    mime = photo_mime(data)
+    if not mime:
+        return back("/perfil", "Formato não aceito. Envie uma foto JPG, PNG ou WebP.")
+    db.set_photo(user["id"], data, mime)
+    return back("/perfil", "Foto salva. Ela só entra no currículo quando você abrir a versão com foto.")
+
+
+@app.post("/perfil/foto/remover")
+def photo_remove(user: dict = Depends(current_user)):
+    db.set_photo(user["id"], None)
+    return back("/perfil", "Foto removida.")
+
+
+@app.post("/perfil/curriculo/gerar")
+def base_cv_generate(user: dict = Depends(current_user)):
+    try:
+        pipeline.base_cv(user["id"])
+    except llm.LLMError as e:
+        return back("/perfil", f"Não consegui gerar o currículo base: {e}")
+    return back("/perfil", "Currículo base gerado a partir do seu perfil. Veja abaixo.")
+
+
+@app.post("/perfil/curriculo")
+def base_cv_save(base_cv: str = Form(""), user: dict = Depends(current_user)):
+    db.set_base_cv(user["id"], base_cv.strip()[:20000])
+    return back("/perfil", "Currículo base salvo.")
+
+
+@app.get("/perfil/curriculo/imprimir")
+def base_cv_print(request: Request, foto: int = 0, user: dict = Depends(current_user)):
+    text = db.get_extras(user["id"])["base_cv"]
+    if not text:
+        raise HTTPException(404, "Currículo base ainda não gerado")
+    return print_page(request, user, f"Currículo de {user['name']}", text, foto, "/perfil/curriculo/imprimir")
