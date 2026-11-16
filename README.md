@@ -69,7 +69,7 @@ cp .env.example .env        # preencha GROQ_API_KEY e SIGNUP_CODE
 uvicorn app.main:app --port 8000
 ```
 
-Abra <http://localhost:8000>, clique em **Criar conta**, escreva o seu perfil e clique em **Atualizar agora**.
+Abra <http://localhost:8000>, clique em **Criar conta**, escreva o seu perfil e deixe o **scanner ligado**.
 
 ## Contas e convites
 
