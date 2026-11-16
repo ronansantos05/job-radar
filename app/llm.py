@@ -17,9 +17,10 @@ DEFAULT_MODEL = "llama-3.3-70b-versatile"
 class LLMError(Exception):
     """Erro ao chamar o modelo. `fatal` indica que não adianta tentar as próximas vagas."""
 
-    def __init__(self, message: str, fatal: bool = False):
+    def __init__(self, message: str, fatal: bool = False, bad_json: bool = False):
         super().__init__(message)
         self.fatal = fatal
+        self.bad_json = bad_json  # a API recusou a resposta por não ser JSON válido
 
 
 def configured() -> bool:
@@ -43,6 +44,8 @@ def chat(system: str, user: str, *, json_mode: bool = False, max_tokens: int = 1
     }
     if json_mode:
         payload["response_format"] = {"type": "json_object"}
+    if os.getenv("GROQ_REASONING_EFFORT"):  # só para modelos que raciocinam (ex.: openai/gpt-oss-120b)
+        payload["reasoning_effort"] = os.environ["GROQ_REASONING_EFFORT"]
     url = (os.getenv("GROQ_BASE_URL") or DEFAULT_BASE_URL).rstrip("/") + "/chat/completions"
 
     last = "sem resposta"
@@ -62,6 +65,8 @@ def chat(system: str, user: str, *, json_mode: bool = False, max_tokens: int = 1
             raise LLMError("chave da Groq recusada (confira GROQ_API_KEY)", fatal=True)
         if r.status_code == 404:
             raise LLMError(f"modelo '{model()}' não encontrado (ajuste GROQ_MODEL)", fatal=True)
+        if r.status_code == 400 and json_mode and "json" in r.text.lower():
+            raise LLMError("o modelo não conseguiu montar o JSON", bad_json=True)
         last = f"HTTP {r.status_code}: {r.text[:160]}"
         if r.status_code == 429 or r.status_code >= 500:
             try:
@@ -77,7 +82,14 @@ def chat(system: str, user: str, *, json_mode: bool = False, max_tokens: int = 1
 
 
 def chat_json(system: str, user: str, **kwargs) -> dict:
-    text = chat(system, user, json_mode=True, **kwargs)
+    try:
+        text = chat(system, user, json_mode=True, **kwargs)
+    except LLMError as e:
+        if not e.bad_json:
+            raise
+        # alguns modelos falham no modo JSON estrito: pede de novo em texto livre e extrai o objeto
+        text = chat(system, user + "\nResponda somente com o objeto JSON, sem nenhum texto antes ou depois.",
+                    **kwargs)
     try:
         data = json.loads(text)
     except ValueError:

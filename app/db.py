@@ -87,9 +87,21 @@ def connect():
         con.close()
 
 
+MIGRATIONS = (
+    "ALTER TABLE users ADD COLUMN scanner INTEGER DEFAULT 1",    # scanner ligado/desligado por conta
+    "ALTER TABLE user_jobs ADD COLUMN tries INTEGER DEFAULT 0",  # análises que falharam nessa vaga
+)
+MAX_TRIES = 3
+
+
 def init() -> None:
     with connect() as con:
         con.executescript(SCHEMA)
+        for sql in MIGRATIONS:
+            try:
+                con.execute(sql)
+            except sqlite3.OperationalError:
+                pass  # coluna já existe
 
 
 # ---------------------------------------------------------------- usuários e sessões
@@ -137,6 +149,17 @@ def update_user(uid: int, *, name: str, profile: str, preferences: str, keywords
     with connect() as con:
         con.execute("UPDATE users SET name=?, profile=?, preferences=?, keywords=?, exclude_title=?, min_score=?"
                     " WHERE id=?", (name, profile, preferences, keywords, exclude_title, min_score, uid))
+
+
+def set_scanner(uid: int, on: bool) -> None:
+    with connect() as con:
+        con.execute("UPDATE users SET scanner=? WHERE id=?", (int(on), uid))
+
+
+def scanner_on(uid: int) -> bool:
+    with connect() as con:
+        row = con.execute("SELECT scanner FROM users WHERE id=?", (uid,)).fetchone()
+        return bool(row and row["scanner"])
 
 
 def get_extras(uid: int) -> dict:
@@ -285,9 +308,21 @@ def list_jobs(uid: int, view: str, min_score: int, q: str = "", limit: int = 300
 
 def pending(uid: int, limit: int) -> list[dict]:
     with connect() as con:
-        rows = con.execute(_SELECT + " AND u.status='nova' ORDER BY u.title_hit DESC, j.posted_at DESC LIMIT :limit",
-                           {"uid": uid, "limit": limit})
+        # vaga cuja análise falhou vai para o fim da fila e sai dela depois de MAX_TRIES tentativas
+        rows = con.execute(_SELECT + " AND u.status='nova' AND u.tries<:max"
+                           " ORDER BY u.tries, u.title_hit DESC, j.posted_at DESC LIMIT :limit",
+                           {"uid": uid, "limit": limit, "max": MAX_TRIES})
         return [_row(r) for r in rows]
+
+
+def add_try(uid: int, jid: str) -> None:
+    with connect() as con:
+        con.execute("UPDATE user_jobs SET tries=tries+1 WHERE user_id=? AND job_id=?", (uid, jid))
+
+
+def reset_tries(uid: int) -> None:
+    with connect() as con:
+        con.execute("UPDATE user_jobs SET tries=0 WHERE user_id=? AND status='nova'", (uid,))
 
 
 def save_score(uid: int, jid: str, score: int, verdict: dict) -> None:

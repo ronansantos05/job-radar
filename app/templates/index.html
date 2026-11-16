@@ -56,12 +56,22 @@
     </details>
   </div>
   <div class="card">
-    <h2>Última coleta</h2>
+    <h2>Scanner</h2>
+    {% if scanner_on %}
+      <p class="small"><span class="dot"></span><b>Ligado</b>{% if running %} · analisando agora{% endif %}<br>
+      Busca vagas novas a cada {{ fetch_minutes }} min e analisa a fila sem parar. Recarregue a página (F5) para
+      ver o andamento.</p>
+    {% else %}
+      <p class="small"><b>Desligado.</b> Nada é buscado nem analisado para a sua conta. Use o botão no topo
+      para ligar.</p>
+    {% endif %}
     {% if last_run %}
-      <p class="small">{{ last_run.finished_at | datetime }}<br>
-      {{ last_run.collected }} vagas lidas · {{ last_run.new }} novas no filtro · {{ last_run.scored }} analisadas</p>
+      <p class="small muted">Última busca nas fontes: {{ last_run.finished_at | datetime }} ·
+      {{ last_run.collected }} vagas lidas · {{ last_run.new }} novas</p>
       {% if last_run.errors %}<p class="small" style="color:var(--mid)">{{ last_run.errors | replace("\n", " · ") }}</p>{% endif %}
-    {% else %}<p class="muted small">Ainda não houve coleta.</p>{% endif %}
+    {% else %}<p class="muted small">Ainda não houve busca nas fontes.</p>{% endif %}
+    {% if scan_error[0] %}<p class="small" style="color:var(--mid)">Último erro de análise
+      ({{ scan_error[0] | datetime }}): {{ scan_error[2] }}</p>{% endif %}
     <p class="muted small">Modelo: {{ model }}</p>
   </div>
 </div>

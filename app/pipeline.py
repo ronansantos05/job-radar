@@ -19,8 +19,13 @@ from . import config, db, llm, sources
 log = logging.getLogger(__name__)
 
 _lock = threading.Lock()
-state = {"running": False, "last_fetch": 0.0}
-MIN_FETCH_INTERVAL = 30 * 60  # não consulta as fontes mais de uma vez a cada 30 min
+_wake = threading.Event()
+state = {"running": False, "last_fetch": 0.0, "error": ""}
+IDLE_SECONDS = 20        # fila vazia: de quanto em quanto tempo o scanner olha de novo
+COOLDOWN_SECONDS = 120   # pausa depois de bater no limite da Groq
+# Fontes que pedem poucas consultas por dia: intervalo mínimo próprio, em segundos.
+SOURCE_MIN_INTERVAL = {"remotive": 6 * 3600}
+_source_fetched: dict[str, float] = {}
 
 CONTRACT_TYPES = {"pj", "freelance", "bolsa", "clt", "estagio", "indefinido"}
 SEPARATOR = "=====CARTA====="
@@ -186,7 +191,7 @@ def score_job(uid: int, job: dict, profile: str, cfg: config.Config) -> int:
         title=job["title"], company=job["company"], location=job["location"] or "não informado",
         salary=job["salary"] or "não informado", tags=", ".join(job["tags"]) or "-",
         description=job["description"][:6000],
-    ), max_tokens=700)
+    ), max_tokens=1500)
     score, verdict = clean_verdict(data)
     db.save_score(uid, job["id"], score, verdict)
     return score
@@ -205,22 +210,27 @@ def link_user(user: dict, cfg: config.Config) -> int:
 
 
 def score_user(user: dict, cfg: config.Config) -> tuple[int, list[str], bool]:
-    """Analisa a fila de um usuário. Devolve (analisadas, erros, parar_tudo)."""
+    """Analisa um lote da fila de um usuário. Devolve (analisadas, erros, parar_tudo)."""
     profile = (user.get("profile") or "").strip()
     if not profile or not llm.configured():
         return 0, [], False
     ucfg = user_config(user, cfg)
-    delay = float(os.getenv("LLM_DELAY_SECONDS", "2"))
+    delay = float(os.getenv("LLM_DELAY_SECONDS", "0.5"))
     scored, errors = 0, []
     for job in db.pending(user["id"], cfg.max_scored_per_run):
+        if not db.scanner_on(user["id"]):  # desligou no meio: para na hora
+            break
         try:
             score_job(user["id"], job, profile, ucfg)
             scored += 1
+            state["error"] = ""
         except llm.LLMError as e:
             # mensagem genérica: o erro aparece para todos, não pode citar vaga de ninguém
             errors.append(f"Análise interrompida: {e}")
+            state["error"] = f"{db.now()}|{e}"
             if e.fatal:
                 return scored, errors, True
+            db.add_try(user["id"], job["id"])  # o problema é desta vaga: ela vai para o fim da fila
             if len(errors) >= 3:
                 break
         time.sleep(delay)
@@ -271,8 +281,11 @@ def collect(cfg: config.Config) -> tuple[int, int, list[str]]:
         if not fetch:
             errors.append(f"Fonte desconhecida no config.yaml: {name}")
             continue
+        if time.time() - _source_fetched.get(name, 0) < SOURCE_MIN_INTERVAL.get(name, 0):
+            continue
         try:
             jobs = fetch()
+            _source_fetched[name] = time.time()
         except Exception as e:  # uma fonte fora do ar não derruba as outras
             log.warning("fonte %s falhou: %s", name, e)
             errors.append(f"Fonte {name} falhou: {type(e).__name__}")
@@ -289,24 +302,28 @@ def collect(cfg: config.Config) -> tuple[int, int, list[str]]:
     return collected, new, errors
 
 
-def _run(fetch: bool = True, only_uid: int | None = None) -> dict:
+def _run(fetch: bool | None = True, only_uid: int | None = None) -> dict:
+    """Um ciclo do scanner. fetch: True = consulta as fontes; None = só se já passou o intervalo."""
     cfg = config.load_config()
     db.init()
     errors: list[str] = []
     collected = new = scored = 0
+    stop = False
+    users = [u for u in db.all_users() if u.get("scanner", 1)]  # scanner desligado = nada roda para a conta
+    if only_uid is not None:
+        users = [u for u in users if u["id"] == only_uid]
+    if fetch is None:
+        fetch = bool(users) and time.time() - state["last_fetch"] >= cfg.fetch_minutes * 60
     run_id = db.start_run() if fetch else None
     if fetch:
         collected, new, errors = collect(cfg)
         db.prune_catalog()
-    users = db.all_users()
-    if only_uid is not None:
-        users = [u for u in users if u["id"] == only_uid]
     for user in users:
         link_user(user, cfg)
     if users and not llm.configured():
         errors.append("GROQ_API_KEY não configurada: as vagas foram coletadas, mas não analisadas.")
     else:
-        for user in users:
+        for user in users:  # um lote por pessoa em cada ciclo: ninguém monopoliza a fila
             n, errs, stop = score_user(user, cfg)
             scored += n
             errors += errs
@@ -314,34 +331,53 @@ def _run(fetch: bool = True, only_uid: int | None = None) -> dict:
                 break
     if run_id:
         db.finish_run(run_id, collected, new, scored, list(dict.fromkeys(errors)))
-    log.info("rodada: %d lidas, %d novas no catálogo, %d analisadas, %d erros",
-             collected, new, scored, len(errors))
-    return {"collected": collected, "new": new, "scored": scored, "errors": errors}
+    if fetch or scored or errors:
+        log.info("ciclo: %d lidas, %d novas no catálogo, %d analisadas, %d erros",
+                 collected, new, scored, len(errors))
+    return {"collected": collected, "new": new, "scored": scored, "errors": errors, "stop": stop}
 
 
-def run_once(fetch: bool = True, only_uid: int | None = None) -> dict | None:
-    """Roda uma rodada. Devolve None se já houver uma em andamento."""
+def run_once(fetch: bool | None = True, only_uid: int | None = None) -> dict | None:
+    """Roda um ciclo. Devolve None se já houver um em andamento."""
     if not _lock.acquire(blocking=False):
         return None
     state["running"] = True
     try:
         return _run(fetch, only_uid)
     except Exception:
-        log.exception("rodada falhou")
+        log.exception("ciclo falhou")
         return None
     finally:
         state["running"] = False
         _lock.release()
 
 
+def wake() -> None:
+    """Acorda o scanner agora (ligaram o scanner, salvaram o perfil...)."""
+    _wake.set()
+
+
 def refresh_in_background(uid: int) -> bool:
-    """Botão "Atualizar agora": consulta as fontes de novo só se a última coleta não for recente."""
-    if state["running"]:
-        return False
-    recent = time.time() - state["last_fetch"] < MIN_FETCH_INTERVAL
-    kwargs = {"fetch": False, "only_uid": uid} if recent else {"fetch": True}
-    threading.Thread(target=run_once, kwargs=kwargs, daemon=True).start()
+    """O perfil mudou: vagas que falharam voltam para a fila e o scanner acorda."""
+    db.reset_tries(uid)
+    wake()
     return True
+
+
+def scanner_loop(stop: threading.Event) -> None:
+    """Scanner contínuo: busca vagas novas no intervalo configurado e analisa a fila sem parar."""
+    time.sleep(3)
+    while not stop.is_set():
+        _wake.clear()
+        result = run_once(fetch=None)
+        if result is None or result["stop"]:
+            wait = COOLDOWN_SECONDS  # limite da Groq ou chave recusada: espera antes de insistir
+        elif result["scored"]:
+            wait = 0                 # ainda pode haver fila: continua direto
+        else:
+            wait = IDLE_SECONDS      # fila vazia ou scanner desligado
+        if wait:
+            _wake.wait(wait)
 
 
 def score_one_in_background(uid: int, jid: str) -> None:

@@ -39,7 +39,7 @@ exclude_title:
 
 max_age_days: 21          # ignora vagas mais antigas que isso
 min_score: 60             # nota a partir da qual a vaga aparece em "Compatíveis"
-max_scored_per_run: 40    # limite de análises por rodada (protege a cota gratuita da Groq)
-interval_hours: 6         # de quanto em quanto tempo coletar
+max_scored_per_run: 40    # análises seguidas por pessoa antes de passar a vez para a próxima conta
+fetch_minutes: 30         # de quanto em quanto tempo o scanner busca vagas novas nas fontes
 
 sources: [remotive, remoteok, himalayas, jobicy, weworkremotely]

@@ -50,6 +50,7 @@ label{display:block;font-size:13px;color:var(--muted);margin:10px 0 4px}
 pre.desc{white-space:pre-wrap;word-wrap:break-word;font:inherit;margin:0;max-height:520px;overflow:auto}
 ul.clean{margin:4px 0 10px;padding-left:18px}
 details summary{cursor:pointer;font-weight:600}
+.dot{display:inline-block;width:8px;height:8px;border-radius:50%;background:var(--good);margin-right:7px}
 .narrow{max-width:420px;margin:40px auto}
 </style>
 </head>
@@ -58,8 +59,10 @@ details summary{cursor:pointer;font-weight:600}
   <a class="brand" href="/">📡 job-radar</a>
   {% if user %}
   <nav><a href="/">Vagas</a><a href="/perfil">Perfil</a></nav>
-  <form method="post" action="/atualizar">
-    <button {% if running %}disabled{% endif %}>{% if running %}Atualizando…{% else %}Atualizar agora{% endif %}</button>
+  <form method="post" action="/scanner">
+    <input type="hidden" name="on" value="{{ 0 if scanner_on else 1 }}">
+    {% if scanner_on %}<button title="Clique para desligar"><span class="dot"></span>Scanner ligado · desligar</button>
+    {% else %}<button class="primary">Ligar scanner</button>{% endif %}
   </form>
   <span class="small muted">{{ user.name }}</span>
   <form method="post" action="/sair"><button>Sair</button></form>

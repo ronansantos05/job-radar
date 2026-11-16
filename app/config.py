@@ -33,7 +33,7 @@ class Config:
     max_age_days: int = 21
     min_score: int = 60
     max_scored_per_run: int = 40
-    interval_hours: float = 6
+    fetch_minutes: float = 30
     sources: list[str] = field(default_factory=lambda: list(DEFAULT_SOURCES))
 
 
@@ -48,7 +48,7 @@ def load_config(path: Path | None = None) -> Config:
     cfg.max_age_days = int(data.get("max_age_days", cfg.max_age_days))
     cfg.min_score = int(data.get("min_score", cfg.min_score))
     cfg.max_scored_per_run = int(data.get("max_scored_per_run", cfg.max_scored_per_run))
-    cfg.interval_hours = float(data.get("interval_hours", cfg.interval_hours))
+    cfg.fetch_minutes = float(data.get("fetch_minutes", cfg.fetch_minutes))
     cfg.sources = [str(s) for s in data.get("sources", DEFAULT_SOURCES)]
     return cfg
 

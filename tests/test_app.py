@@ -348,3 +348,59 @@ def test_photo_and_base_cv(monkeypatch):
 
     assert a.post("/perfil/foto/remover").status_code == 303 and a.get("/perfil/foto").status_code == 404
     assert '<img class="photo"' not in a.get(url + "?foto=1").text
+
+
+def test_scanner_toggle_and_failed_jobs(monkeypatch):
+    ana, bia = make_user("a@example.com"), make_user("b@example.com")
+    for n in (1, 2):
+        add_job_for(ana, n)
+        add_job_for(bia, n)
+    a = login("a@example.com")
+    assert "Scanner ligado" in a.get("/").text
+    assert a.post("/scanner", data={"on": "0"}).status_code == 303
+    assert "Ligar scanner" in a.get("/").text and db.scanner_on(bia["id"])
+
+    # desligado = nada é analisado para ela; a outra conta segue normalmente
+    monkeypatch.setattr(sources, "SOURCES", {})
+    monkeypatch.setattr(llm, "chat", lambda *a, **k: VERDICT)
+    assert pipeline.run_once(fetch=None)["scored"] == 2
+    assert db.counts(ana["id"], 60)["analisadas"] == 0 and db.counts(bia["id"], 60)["analisadas"] == 2
+
+    # religado: uma vaga que o modelo não consegue analisar não trava a fila
+    a.post("/scanner", data={"on": "1"})
+    calls = []
+
+    def flaky(system, user, **kw):
+        calls.append(user)
+        if "https://example.com/1" in user or len(calls) == 1:
+            raise llm.LLMError("resposta ruim")
+        return VERDICT
+
+    monkeypatch.setattr(llm, "chat", flaky)
+    first = pipeline.run_once(fetch=None)
+    assert first["scored"] == 1 and first["errors"] and not first["stop"]
+    assert pipeline.state["error"] == "" or "resposta ruim" in pipeline.state["error"]
+    assert pipeline.run_once(fetch=None)["scored"] == 1  # a que falhou voltou no fim da fila
+    assert db.counts(ana["id"], 60)["analisadas"] == 2
+
+
+def test_json_mode_failure_falls_back_to_plain_text(monkeypatch):
+    class Reply:
+        def __init__(self, status, body):
+            self.status_code, self._body, self.headers = status, body, {}
+            self.text = str(body)
+
+        def json(self):
+            return self._body
+
+    sent = []
+
+    def post(url, json, headers, timeout):
+        sent.append(json)
+        if "response_format" in json:
+            return Reply(400, {"error": {"message": "Failed to generate JSON", "code": "json_validate_failed"}})
+        return Reply(200, {"choices": [{"message": {"content": 'Claro: {"score": 70}'}}]})
+
+    monkeypatch.setattr(llm.httpx, "post", post)
+    assert llm.chat_json("s", "u") == {"score": 70}
+    assert len(sent) == 2 and "response_format" not in sent[1]

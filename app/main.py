@@ -1,13 +1,13 @@
 """Dashboard web (FastAPI) com contas de usuário + agendador da coleta."""
 from __future__ import annotations
 
-import asyncio
 import hashlib
 import html
 import logging
 import os
 import re
 import secrets
+import threading
 from contextlib import asynccontextmanager
 from datetime import datetime
 from pathlib import Path
@@ -38,25 +38,18 @@ def current_user(request: Request) -> dict:
     return user
 
 
-async def _scheduler() -> None:
-    await asyncio.sleep(3)
-    while True:
-        await asyncio.to_thread(pipeline.run_once)
-        await asyncio.sleep(max(0.25, config.load_config().interval_hours) * 3600)
-
-
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
     db.init()
     if db.count_users() == 0 and not auth.invite_code():
         log.warning("Nenhuma conta criada e SIGNUP_CODE não definido: a primeira pessoa que abrir "
                     "/cadastro vira administradora. Crie a sua conta agora.")
-    task = None
+    stop = threading.Event()
     if os.getenv("DISABLE_SCHEDULER") != "1":
-        task = asyncio.create_task(_scheduler())
+        threading.Thread(target=pipeline.scanner_loop, args=(stop,), daemon=True).start()
     yield
-    if task:
-        task.cancel()
+    stop.set()
+    pipeline.wake()
 
 
 app = FastAPI(title="job-radar", lifespan=lifespan, docs_url=None, redoc_url=None, openapi_url=None)
@@ -137,7 +130,7 @@ templates.env.filters["safe_url"] = safe_url
 def page(request: Request, name: str, user: dict | None = None, **ctx):
     ctx.setdefault("msg", request.query_params.get("msg", ""))
     ctx["user"] = user
-    ctx["running"] = pipeline.state["running"]
+    ctx["scanner_on"] = bool(user and user.get("scanner", 1))
     ctx["has_profile"] = bool(user and (user.get("profile") or "").strip())
     ctx["has_key"] = llm.configured()
     return templates.TemplateResponse(request, name, ctx)
@@ -273,15 +266,19 @@ def index(request: Request, view: str = "compativeis", q: str = "", user: dict =
         jobs=db.list_jobs(user["id"], view, min_score, q.strip()[:80]),
         counts=db.counts(user["id"], min_score), views=db.VIEWS, view=view, q=q,
         min_score=min_score, events=db.recent_events(user["id"]), last_run=db.last_run(),
+        running=pipeline.state["running"], scan_error=pipeline.state["error"].partition("|"),
+        fetch_minutes=round(config.load_config().fetch_minutes),
         model=llm.model(),
     )
 
 
-@app.post("/atualizar")
-def refresh(user: dict = Depends(current_user)):
-    started = pipeline.refresh_in_background(user["id"])
-    return back("/", "Atualização iniciada. Recarregue a página em alguns minutos." if started
-                else "Já existe uma atualização em andamento.")
+@app.post("/scanner")
+def scanner(on: int = Form(...), user: dict = Depends(current_user)):
+    db.set_scanner(user["id"], bool(on))
+    if on:
+        pipeline.wake()
+        return back("/", "Scanner ligado: o painel busca vagas novas e analisa a fila sozinho, sem parar.")
+    return back("/", "Scanner desligado: nada é buscado nem analisado para a sua conta até você ligar de novo.")
 
 
 @app.post("/adicionar")
@@ -377,7 +374,7 @@ def profile_save(name: str = Form(...), profile: str = Form(""), preferences: st
         preferences=preferences.strip()[:3000], keywords=keywords.strip()[:3000],
         exclude_title=exclude_title.strip()[:3000], min_score=max(0, min(100, min_score)))
     pipeline.refresh_in_background(user["id"])
-    return back("/perfil", "Perfil salvo. As vagas estão sendo reavaliadas com os novos dados.")
+    return back("/perfil", "Perfil salvo.")
 
 
 @app.post("/perfil/senha")

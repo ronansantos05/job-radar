@@ -11,7 +11,8 @@
 
 Assistente de busca de trabalho remoto que roda na sua própria VPS:
 
-1. **Coleta** vagas remotas de APIs públicas, de tempos em tempos.
+1. **Coleta** vagas remotas de APIs públicas sozinho, com um scanner contínuo que cada pessoa liga ou
+   desliga com um botão.
 2. **Dá uma nota de 0 a 100** para cada vaga comparando com o seu perfil e as suas preferências
    (remoto, PJ/freelance/bolsa, país…), usando um LLM da [Groq](https://groq.com).
 3. **Adapta o currículo e a carta de apresentação** a cada vaga, usando **somente** o que você escreveu
@@ -75,8 +76,7 @@ Abra <http://localhost:8000>, clique em **Criar conta**, escreva o seu perfil e 
 - A **primeira conta criada vira administradora**. Crie a sua logo depois de subir o sistema.
 - Para outras pessoas se cadastrarem, defina `SIGNUP_CODE` e passe o código para elas. Sem essa variável,
   o cadastro fica fechado depois da primeira conta.
-- Todas as contas usam a mesma chave da Groq (a do servidor). O limite de análises por rodada
-  (`max_scored_per_run`) vale por pessoa.
+- Todas as contas usam a mesma chave da Groq (a do servidor). O scanner atende as contas em rodízio.
 - Cada pessoa define, na página **Perfil**, o próprio perfil, as preferências, as palavras-chave e a
   nota mínima. O `config.yaml` só fornece os valores iniciais de uma conta nova.
 
@@ -125,17 +125,25 @@ para a porta `8000`. O HTTPS fica por conta do painel.
 Na página **Perfil** dá para gerar o **currículo base**: o currículo geral, sem vaga, para você conferir
 como o perfil vira currículo antes de o sistema adaptar um para cada vaga.
 
+## Scanner
+
+Com o **scanner ligado** (botão no topo), o painel trabalha sozinho: busca vagas novas nas fontes a cada
+`fetch_minutes` e analisa a fila sem parar, até esvaziar. Quando a Groq responde que o limite foi atingido,
+ele espera e continua. **Desligar** para tudo para aquela conta: nada é buscado nem analisado até ligar de
+novo. O scanner só dá notas; gerar o currículo e enviar a candidatura continuam sendo ações suas.
+
 ## Configuração (`config.yaml`)
 
 | Campo | O que faz |
 |---|---|
 | `preferences`, `keywords`, `exclude_title`, `min_score` | Valores iniciais de uma conta nova (cada pessoa edita os seus em **Perfil**) |
 | `max_age_days` | Ignora vagas mais antigas que isso |
-| `max_scored_per_run` | Limite de análises por rodada (protege a cota gratuita da Groq) |
-| `interval_hours` | Intervalo entre as coletas |
+| `max_scored_per_run` | Análises seguidas por pessoa antes de passar a vez para a próxima conta |
+| `fetch_minutes` | Intervalo entre as buscas de vagas novas nas fontes |
 | `sources` | Fontes ativas |
 
-O modelo é escolhido no `.env` (`GROQ_MODEL`). Qualquer API compatível com OpenAI funciona trocando
+O modelo é escolhido no `.env` (`GROQ_MODEL`). Em modelos que raciocinam antes de responder (como
+`openai/gpt-oss-120b`), `GROQ_REASONING_EFFORT=low` deixa a análise mais rápida. Qualquer API compatível com OpenAI funciona trocando
 `GROQ_BASE_URL`.
 
 ## Segurança
