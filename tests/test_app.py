@@ -471,3 +471,23 @@ def test_pdf_download_is_private_and_clean():
     finally:
         pdf.FONT_SETS = old
     assert pdf.filename("CV", "João Ação", "Acme / Inc. (Remote)") == "CV - Joao Acao - Acme Inc. Remote.pdf"
+
+
+def test_pdf_layout_tolerates_sloppy_markdown():
+    from app import pdf
+    text = ("# Ana Souza\n**Email:** a@example.com\n**Summary**\nMachine\u2011learning engineer.\n"
+            "- Built end\u2011to\u2011end pipelines\n  with Docker\n## Experience\n"
+            "### Head of R&D — Acme | 2021 – Present\n- Led the team\n\n```\n---\n")
+    kinds = [b for b in pdf.blocks(text) if b[0] != "gap"]
+    assert kinds == [("h1", "Ana Souza"), ("p", "**Email:** a@example.com"), ("h2", "Summary"),
+                     ("p", "Machine-learning engineer."), ("bullet", "Built end-to-end pipelines with Docker"),
+                     ("h2", "Experience"), ("h3", "Head of R&D — Acme | 2021 – Present"),
+                     ("bullet", "Led the team")]
+    m = pdf.DATE_TAIL.match("Head of R&D — Acme | 2021 – Present")
+    assert m and (m.group(1), m.group(2)) == ("Head of R&D — Acme", "2021 – Present")
+    assert pdf.DATE_TAIL.match("MSc — UFRJ (2019 - 2022)").group(2) == "2019 - 2022"
+    assert not pdf.DATE_TAIL.match("job-radar — LLM job ranker")
+    assert pdf._spans("a **b** *c* [d](https://x.y)") == [("", "a "), ("B", "b"), ("", " "), ("I", "c"),
+                                                          ("", " "), ("", "d")]
+    assert "Cada fato fica onde o perfil o coloca" in pipeline.TAILOR_SYSTEM
+    assert "{" not in pipeline.CV_RULES
