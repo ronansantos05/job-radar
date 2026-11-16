@@ -117,8 +117,9 @@ para a porta `8000`. O HTTPS fica por conta do painel.
 1. Abra a aba **Compatíveis**: as vagas já vêm ordenadas pela nota.
 2. Entre numa vaga, leia a análise (pontos fortes, lacunas, tipo de contrato) e clique em
    **Gerar currículo adaptado**.
-3. Revise e edite o texto, abra a **versão para imprimir** e salve como PDF (Ctrl+P).
-   Se você enviou uma foto em **Perfil**, há também a versão **com foto** (a foto nunca entra sozinha).
+3. Revise e edite o texto e clique em **Baixar currículo (PDF)** e **Baixar carta (PDF)**. O PDF é
+   feito no servidor, então sai limpo, sem data, endereço ou número de página do navegador.
+   Se você enviou uma foto em **Perfil**, há também o botão **com foto** (a foto nunca entra sozinha).
 4. Envie a candidatura no site da vaga e clique em **Marcar como submetida**.
 5. Atualize o status conforme a resposta (entrevista, oferta, recusada) e anote o que precisar.
 

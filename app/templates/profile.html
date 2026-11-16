@@ -43,8 +43,9 @@
     <form method="post" action="/perfil/curriculo">
       <textarea name="base_cv" rows="18">{{ extras.base_cv }}</textarea>
       <p class="row"><button class="primary">Salvar edições</button>
-        <a class="btn" href="/perfil/curriculo/imprimir" target="_blank" rel="noopener">Ver / imprimir</a>
-        {% if extras.has_photo %}<a class="btn" href="/perfil/curriculo/imprimir?foto=1" target="_blank" rel="noopener">Ver com foto</a>{% endif %}</p>
+        <a class="btn" href="/perfil/curriculo/pdf">Baixar PDF</a>
+        {% if extras.has_photo %}<a class="btn" href="/perfil/curriculo/pdf?foto=1">Baixar PDF com foto</a>{% endif %}
+        <a class="small" href="/perfil/curriculo/imprimir" target="_blank" rel="noopener">pré-visualizar</a></p>
     </form>
     {% endif %}
     <form method="post" action="/perfil/curriculo/gerar">

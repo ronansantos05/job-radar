@@ -18,7 +18,7 @@ from fastapi import Depends, FastAPI, File, Form, HTTPException, Request, Upload
 from fastapi.responses import PlainTextResponse, RedirectResponse, Response
 from fastapi.templating import Jinja2Templates
 
-from . import auth, config, db, llm, pipeline
+from . import auth, config, db, llm, pdf, pipeline
 
 config.load_env()
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
@@ -153,12 +153,25 @@ def photo_mime(data: bytes) -> str | None:
     return next((mime for magic, mime in PHOTO_TYPES if data.startswith(magic)), None)
 
 
-def print_page(request: Request, user: dict, title: str, text: str, with_photo, toggle_url: str = ""):
-    """Versão para imprimir. `toggle_url` vazio = documento sem opção de foto (a carta)."""
+def print_page(request: Request, user: dict, title: str, text: str, with_photo, toggle_url: str = "",
+               pdf_url: str = ""):
+    """Pré-visualização. `toggle_url` vazio = documento sem opção de foto (a carta)."""
     has_photo = db.get_extras(user["id"])["has_photo"]
+    photo = bool(with_photo) and has_photo
+    if photo:
+        pdf_url += ("&" if "?" in pdf_url else "?") + "foto=1"
     return templates.TemplateResponse(request, "print.html", {
-        "title": title, "body": render_markdown(text), "photo": bool(with_photo) and has_photo,
-        "has_photo": has_photo, "toggle_url": toggle_url})
+        "title": title, "body": render_markdown(text), "photo": photo,
+        "has_photo": has_photo, "toggle_url": toggle_url, "pdf_url": pdf_url})
+
+
+def pdf_download(user: dict, text: str, with_photo, *name_parts: str) -> Response:
+    """PDF feito no servidor: sai limpo, sem data, endereço e número de página do navegador."""
+    photo = db.get_photo(user["id"]) if with_photo else None
+    data = pdf.render(text, " - ".join(p for p in name_parts if p), photo[0] if photo else None)
+    return Response(data, media_type="application/pdf", headers={
+        "Content-Disposition": f'attachment; filename="{pdf.filename(*name_parts)}"',
+        "Cache-Control": "no-store"})
 
 
 def job_or_404(uid: int, jid: str) -> dict:
@@ -364,7 +377,19 @@ def job_print(request: Request, jid: str, doc: str = "cv", foto: int = 0,
         raise HTTPException(404, "Documento ainda não gerado")
     is_cv = doc != "carta"
     return print_page(request, user, job["title"], text, foto and is_cv,
-                      f"/vaga/{jid}/imprimir?doc=cv" if is_cv else "")
+                      f"/vaga/{jid}/imprimir?doc=cv" if is_cv else "",
+                      f"/vaga/{jid}/pdf?doc={'cv' if is_cv else 'carta'}")
+
+
+@app.get("/vaga/{jid}/pdf")
+def job_pdf(jid: str, doc: str = "cv", foto: int = 0, user: dict = Depends(current_user)):
+    job = job_or_404(user["id"], jid)
+    is_cv = doc != "carta"
+    text = job["cv_md"] if is_cv else job["cover_md"]
+    if not text:
+        raise HTTPException(404, "Documento ainda não gerado")
+    return pdf_download(user, text, foto and is_cv, "CV" if is_cv else "Carta", user["name"],
+                        job["company"] or job["title"])
 
 
 @app.get("/perfil")
@@ -449,4 +474,13 @@ def base_cv_print(request: Request, foto: int = 0, user: dict = Depends(current_
     text = db.get_extras(user["id"])["base_cv"]
     if not text:
         raise HTTPException(404, "Currículo base ainda não gerado")
-    return print_page(request, user, f"Currículo de {user['name']}", text, foto, "/perfil/curriculo/imprimir")
+    return print_page(request, user, f"Currículo de {user['name']}", text, foto, "/perfil/curriculo/imprimir",
+                      "/perfil/curriculo/pdf")
+
+
+@app.get("/perfil/curriculo/pdf")
+def base_cv_pdf(foto: int = 0, user: dict = Depends(current_user)):
+    text = db.get_extras(user["id"])["base_cv"]
+    if not text:
+        raise HTTPException(404, "Currículo base ainda não gerado")
+    return pdf_download(user, text, foto, "CV", user["name"])

@@ -442,3 +442,32 @@ def test_generate_all_and_no_stale_errors(monkeypatch):
     pipeline.run_once()
     page = a.get("/").text
     assert "Failed to generate JSON" not in page and "Análise interrompida" not in page
+
+
+def test_pdf_download_is_private_and_clean():
+    ana, bia = make_user("a@example.com"), make_user("b@example.com")
+    jid = add_job_for(ana, 1)
+    db.save_docs(ana["id"], jid, "# Ana Souza\n\nSão Paulo – “ML”\n\n## Experiência\n- **Python** e *SQL* ≥ 5 anos",
+                 "Prezados,\n\nSegue a carta.")
+    a, b = login("a@example.com"), login("b@example.com")
+    r = a.get(f"/vaga/{jid}/pdf?doc=cv")
+    assert r.status_code == 200 and r.headers["content-type"] == "application/pdf"
+    assert r.content.startswith(b"%PDF") and "attachment" in r.headers["content-disposition"]
+    assert r.headers["content-disposition"].endswith('.pdf"')
+    assert a.get(f"/vaga/{jid}/pdf?doc=carta").content.startswith(b"%PDF")
+    assert a.get(f"/vaga/{jid}/pdf?doc=cv&foto=1").status_code == 200   # sem foto enviada: sai sem foto
+    assert b.get(f"/vaga/{jid}/pdf?doc=cv").status_code == 404          # outra conta não baixa
+    assert TestClient(main.app, follow_redirects=False).get(f"/vaga/{jid}/pdf").status_code in (303, 401)
+    page = a.get(f"/vaga/{jid}").text
+    assert "Baixar currículo (PDF)" in page and "Baixar carta (PDF)" in page
+    assert a.get("/perfil/curriculo/pdf").status_code == 404            # currículo base ainda não gerado
+    db.set_base_cv(ana["id"], "# Ana Souza\n\nResumo")
+    assert a.get("/perfil/curriculo/pdf").content.startswith(b"%PDF")
+    # sem fonte no sistema, cai na fonte embutida e não quebra com símbolos
+    from app import pdf
+    old, pdf.FONT_SETS = pdf.FONT_SETS, ()
+    try:
+        assert pdf.render("# Ana – “teste” ≥ 5 ✓ 日本", "x").startswith(b"%PDF")
+    finally:
+        pdf.FONT_SETS = old
+    assert pdf.filename("CV", "João Ação", "Acme / Inc. (Remote)") == "CV - Joao Acao - Acme Inc. Remote.pdf"

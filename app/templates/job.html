@@ -51,9 +51,10 @@
         <label>Currículo (Markdown)</label><textarea name="cv_md" rows="22">{{ job.cv_md }}</textarea>
         <label>Carta de apresentação</label><textarea name="cover_md" rows="9">{{ job.cover_md or "" }}</textarea>
         <p class="row"><button class="primary">Salvar edições</button>
-          <a class="btn" href="/vaga/{{ job.id }}/imprimir?doc=cv" target="_blank" rel="noopener">Currículo para imprimir / PDF</a>
-          {% if has_photo %}<a class="btn" href="/vaga/{{ job.id }}/imprimir?doc=cv&amp;foto=1" target="_blank" rel="noopener">Currículo com foto</a>{% endif %}
-          {% if job.cover_md %}<a class="btn" href="/vaga/{{ job.id }}/imprimir?doc=carta" target="_blank" rel="noopener">Carta para imprimir / PDF</a>{% endif %}</p>
+          <a class="btn primary" href="/vaga/{{ job.id }}/pdf?doc=cv">Baixar currículo (PDF)</a>
+          {% if has_photo %}<a class="btn" href="/vaga/{{ job.id }}/pdf?doc=cv&amp;foto=1">Baixar currículo com foto</a>{% endif %}
+          {% if job.cover_md %}<a class="btn" href="/vaga/{{ job.id }}/pdf?doc=carta">Baixar carta (PDF)</a>{% endif %}
+          <a class="small" href="/vaga/{{ job.id }}/imprimir?doc=cv" target="_blank" rel="noopener">pré-visualizar</a></p>
       </form>
     </div>
     {% endif %}
