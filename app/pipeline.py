@@ -21,6 +21,7 @@ log = logging.getLogger(__name__)
 _lock = threading.Lock()
 _wake = threading.Event()
 state = {"running": False, "last_fetch": 0.0, "error": ""}
+tailoring: dict[int, int] = {}  # usuário -> currículos que ainda faltam gerar no lote em andamento
 IDLE_SECONDS = 20        # fila vazia: de quanto em quanto tempo o scanner olha de novo
 COOLDOWN_SECONDS = 120   # pausa depois de bater no limite da Groq
 # Fontes que pedem poucas consultas por dia: intervalo mínimo próprio, em segundos.
@@ -227,8 +228,8 @@ def score_user(user: dict, cfg: config.Config) -> tuple[int, list[str], bool]:
         except llm.LLMError as e:
             # mensagem genérica: o erro aparece para todos, não pode citar vaga de ninguém
             errors.append(f"Análise interrompida: {e}")
-            state["error"] = f"{db.now()}|{e}"
-            if e.fatal:
+            if e.fatal:  # limite ou chave: o scanner pausa e tenta de novo sozinho
+                state["error"] = f"{db.now()}|{e}"
                 return scored, errors, True
             db.add_try(user["id"], job["id"])  # o problema é desta vaga: ela vai para o fim da fila
             if len(errors) >= 3:
@@ -256,6 +257,35 @@ def tailor(uid: int, jid: str) -> None:
     if not cv:
         raise llm.LLMError("o modelo devolveu um currículo vazio")
     db.save_docs(uid, jid, cv, cover, generated=True)
+
+
+def tailor_all_in_background(uid: int, min_score: int) -> int:
+    """Gera currículo e carta para todas as vagas compatíveis que ainda não têm. Devolve quantas são."""
+    if tailoring.get(uid):
+        return 0
+    todo = [j["id"] for j in db.list_jobs(uid, "compativeis", min_score) if not j["cv_md"]]
+    if not todo:
+        return 0
+    tailoring[uid] = len(todo)
+
+    def work():
+        try:
+            for jid in todo:
+                try:
+                    tailor(uid, jid)
+                except llm.LLMError as e:
+                    log.warning("currículo em lote falhou: %s", e)
+                    if e.fatal:
+                        state["error"] = f"{db.now()}|{e}"
+                        break
+                except ValueError:
+                    pass  # a vaga saiu da lista no meio do caminho
+                tailoring[uid] -= 1
+        finally:
+            tailoring.pop(uid, None)
+
+    threading.Thread(target=work, daemon=True).start()
+    return len(todo)
 
 
 def base_cv(uid: int) -> None:
@@ -314,10 +344,11 @@ def _run(fetch: bool | None = True, only_uid: int | None = None) -> dict:
         users = [u for u in users if u["id"] == only_uid]
     if fetch is None:
         fetch = bool(users) and time.time() - state["last_fetch"] >= cfg.fetch_minutes * 60
-    run_id = db.start_run() if fetch else None
     if fetch:
+        run_id = db.start_run()
         collected, new, errors = collect(cfg)
         db.prune_catalog()
+        db.finish_run(run_id, collected, new, 0, list(dict.fromkeys(errors)))
     for user in users:
         link_user(user, cfg)
     if users and not llm.configured():
@@ -329,8 +360,6 @@ def _run(fetch: bool | None = True, only_uid: int | None = None) -> dict:
             errors += errs
             if stop:
                 break
-    if run_id:
-        db.finish_run(run_id, collected, new, scored, list(dict.fromkeys(errors)))
     if fetch or scored or errors:
         log.info("ciclo: %d lidas, %d novas no catálogo, %d analisadas, %d erros",
                  collected, new, scored, len(errors))

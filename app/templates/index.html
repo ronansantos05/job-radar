@@ -15,7 +15,15 @@
       <a class="tab {% if key == view %}on{% endif %}" href="/?view={{ key }}">{{ label }} · {{ counts[key] }}</a>
     {% endfor %}
   </div>
-  <form method="get" action="/" class="row" style="margin-bottom:10px">
+  {% if tailoring %}
+<p class="banner ok small">Gerando currículos e cartas: faltam {{ tailoring }}. Recarregue a página (F5) para acompanhar.</p>
+{% elif view == "compativeis" and counts.compativeis %}
+<form method="post" action="/gerar-todas" style="margin-bottom:10px">
+  <button class="primary">Gerar currículo e carta para as {{ counts.compativeis }} compatíveis</button>
+  <span class="muted small">Só gera os textos. O envio continua sendo seu, vaga por vaga.</span>
+</form>
+{% endif %}
+<form method="get" action="/" class="row" style="margin-bottom:10px">
     <input type="hidden" name="view" value="{{ view }}">
     <input type="search" name="q" value="{{ q }}" placeholder="Buscar por título, empresa ou tag" style="max-width:340px">
     <button>Buscar</button>
@@ -70,8 +78,8 @@
       {{ last_run.collected }} vagas lidas · {{ last_run.new }} novas</p>
       {% if last_run.errors %}<p class="small" style="color:var(--mid)">{{ last_run.errors | replace("\n", " · ") }}</p>{% endif %}
     {% else %}<p class="muted small">Ainda não houve busca nas fontes.</p>{% endif %}
-    {% if scan_error[0] %}<p class="small" style="color:var(--mid)">Último erro de análise
-      ({{ scan_error[0] | datetime }}): {{ scan_error[2] }}</p>{% endif %}
+    {% if scan_error[0] %}<p class="small" style="color:var(--mid)">Em pausa desde
+      {{ scan_error[0] | datetime }}: {{ scan_error[2] }}. O scanner tenta de novo sozinho.</p>{% endif %}
     <p class="muted small">Modelo: {{ model }}</p>
   </div>
 </div>

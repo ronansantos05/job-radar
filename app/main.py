@@ -266,10 +266,23 @@ def index(request: Request, view: str = "compativeis", q: str = "", user: dict =
         jobs=db.list_jobs(user["id"], view, min_score, q.strip()[:80]),
         counts=db.counts(user["id"], min_score), views=db.VIEWS, view=view, q=q,
         min_score=min_score, events=db.recent_events(user["id"]), last_run=db.last_run(),
-        running=pipeline.state["running"], scan_error=pipeline.state["error"].partition("|"),
+        running=pipeline.state["running"], tailoring=pipeline.tailoring.get(user["id"], 0), scan_error=pipeline.state["error"].partition("|"),
         fetch_minutes=round(config.load_config().fetch_minutes),
         model=llm.model(),
     )
+
+
+@app.post("/gerar-todas")
+def generate_all(user: dict = Depends(current_user)):
+    if not (user.get("profile") or "").strip():
+        return back("/", "Preencha o perfil antes de gerar currículos.")
+    if pipeline.tailoring.get(user["id"]):
+        return back("/", "Já existe uma geração em andamento. Recarregue a página para acompanhar.")
+    n = pipeline.tailor_all_in_background(user["id"], user["min_score"])
+    if not n:
+        return back("/", "Nenhuma vaga compatível sem currículo no momento.")
+    return back("/", f"Gerando currículo e carta para {n} vaga(s). Elas aparecem em “Currículo pronto” "
+                     "conforme ficam prontas; revise cada uma antes de enviar.")
 
 
 @app.post("/scanner")

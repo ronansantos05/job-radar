@@ -404,3 +404,41 @@ def test_json_mode_failure_falls_back_to_plain_text(monkeypatch):
     monkeypatch.setattr(llm.httpx, "post", post)
     assert llm.chat_json("s", "u") == {"score": 70}
     assert len(sent) == 2 and "response_format" not in sent[1]
+
+
+def test_generate_all_and_no_stale_errors(monkeypatch):
+    ana, bia = make_user("a@example.com"), make_user("b@example.com")
+    jobs = [add_job_for(ana, n) for n in (1, 2, 3)]
+    other = add_job_for(bia, 1)
+    for jid in jobs[:2]:
+        db.save_score(ana["id"], jid, 80, {})
+    db.save_score(ana["id"], jobs[2], 10, {})   # abaixo da nota mínima: fica de fora
+    db.save_score(bia["id"], other, 90, {})     # de outra conta: fica de fora
+    a = login("a@example.com")
+    assert "Gerar currículo e carta para as 2 compatíveis" in a.get("/").text
+
+    started = []
+    monkeypatch.setattr(pipeline.threading, "Thread", lambda target, daemon: started.append(target) or
+                        type("T", (), {"start": lambda self: None})())
+    monkeypatch.setattr(llm, "chat", lambda s, u, **k: f"# CV\n{pipeline.SEPARATOR}\nCarta")
+    assert a.post("/gerar-todas").status_code == 303
+    assert pipeline.tailoring[ana["id"]] == 2 and "faltam 2" in a.get("/").text
+    assert a.post("/gerar-todas").status_code == 303 and len(started) == 1  # não dispara dois lotes
+    started[0]()
+    assert ana["id"] not in pipeline.tailoring
+    assert [bool(db.get_job(ana["id"], j)["cv_md"]) for j in jobs] == [True, True, False]
+    assert not db.get_job(bia["id"], other)["cv_md"]
+    assert db.counts(ana["id"], 60)["curriculo"] == 2
+
+    # erro passageiro de análise não fica exposto no painel
+    add_job_for(ana, 9)
+    monkeypatch.setattr(sources, "SOURCES", {})
+
+    def broken(*args, **kwargs):
+        raise llm.LLMError("HTTP 400: Failed to generate JSON")
+
+    monkeypatch.setattr(llm, "chat", broken)
+    pipeline.state["error"] = ""
+    pipeline.run_once()
+    page = a.get("/").text
+    assert "Failed to generate JSON" not in page and "Análise interrompida" not in page
