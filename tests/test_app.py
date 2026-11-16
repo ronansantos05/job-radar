@@ -292,6 +292,16 @@ def test_csrf_and_status_flow():
     blocked = c.post(f"/vaga/{jid}/status", data={"status": "submetida"},
                      headers={"Origin": "https://site-malicioso.example"})
     assert blocked.status_code == 403 and db.get_job(user["id"], jid)["status"] == "nova"
+    for bad in ({"Origin": "null"}, {"Sec-Fetch-Site": "cross-site"},
+                {"Sec-Fetch-Site": "same-site", "Origin": "http://testserver"}):
+        assert c.post(f"/vaga/{jid}/status", data={"status": "submetida"}, headers=bad).status_code == 403
+    assert db.get_job(user["id"], jid)["status"] == "nova"
+    # Navegador de verdade no próprio painel, inclusive atrás de proxy (Easypanel) e com "Origin: null".
+    for good in ({"Sec-Fetch-Site": "same-origin", "Origin": "null"},
+                 {"Origin": "https://radar.exemplo.com", "X-Forwarded-Host": "radar.exemplo.com"},
+                 {"Origin": "http://testserver"}):
+        assert c.post(f"/vaga/{jid}/status", data={"status": "nova"}, headers=good).status_code == 303
+    assert c.get("/entrar").headers["referrer-policy"] == "same-origin"
     assert c.post(f"/vaga/{jid}/status", data={"status": "submetida"}).status_code == 303
     job = db.get_job(user["id"], jid)
     assert job["status"] == "submetida" and job["applied_at"]

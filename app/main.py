@@ -67,17 +67,30 @@ async def needs_login(_request: Request, _exc: NeedsLogin):
     return RedirectResponse("/entrar", status_code=303)
 
 
+def same_origin(request: Request) -> bool:
+    """O POST veio de uma página do próprio painel?"""
+    # Navegadores atuais informam isso direto (em HTTPS e localhost); uma página não consegue forjar.
+    site = request.headers.get("sec-fetch-site")
+    if site:
+        return site in ("same-origin", "none")
+    origin = request.headers.get("origin") or request.headers.get("referer")
+    if not origin:
+        return True  # cliente que não é navegador (curl, testes): não há CSRF sem navegador
+    hosts = {request.headers.get("host"), request.headers.get("x-forwarded-host")} - {None}
+    return urlparse(origin).netloc in hosts
+
+
 @app.middleware("http")
 async def security_middleware(request: Request, call_next):
     # CSRF: formulários só valem se vierem do próprio painel.
-    if request.method == "POST":
-        origin = request.headers.get("origin") or request.headers.get("referer")
-        if origin and urlparse(origin).netloc != request.headers.get("host"):
-            return PlainTextResponse("Origem não permitida", status_code=403)
+    if request.method == "POST" and not same_origin(request):
+        return PlainTextResponse("Origem não permitida", status_code=403)
     response = await call_next(request)
     response.headers["X-Frame-Options"] = "DENY"
     response.headers["X-Content-Type-Options"] = "nosniff"
-    response.headers["Referrer-Policy"] = "no-referrer"
+    # "same-origin" e não "no-referrer": com "no-referrer" o navegador manda "Origin: null" até nos
+    # formulários do próprio painel, e a checagem de CSRF acima não teria como reconhecê-los.
+    response.headers["Referrer-Policy"] = "same-origin"
     response.headers["X-Robots-Tag"] = "noindex, nofollow"
     response.headers["Content-Security-Policy"] = (
         "default-src 'none'; style-src 'unsafe-inline'; img-src 'self' data:; form-action 'self'; "
