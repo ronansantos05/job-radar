@@ -19,7 +19,7 @@ from fastapi.responses import PlainTextResponse, RedirectResponse, Response
 from fastapi.templating import Jinja2Templates
 from markupsafe import Markup
 
-from . import auth, config, db, llm, pdf, pipeline
+from . import attach, auth, config, db, llm, pdf, pipeline
 
 config.load_env()
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
@@ -87,7 +87,8 @@ async def security_middleware(request: Request, call_next):
     response.headers["Referrer-Policy"] = "same-origin"
     response.headers["X-Robots-Tag"] = "noindex, nofollow"
     response.headers["Content-Security-Policy"] = (
-        "default-src 'none'; style-src 'unsafe-inline'; img-src 'self' data:; form-action 'self'; "
+        "default-src 'none'; style-src 'unsafe-inline'; img-src 'self' data:; script-src 'self'; "
+        "form-action 'self'; "
         "base-uri 'none'; frame-ancestors 'none'")
     response.headers["Cache-Control"] = "no-store"
     return response
@@ -347,14 +348,32 @@ def job_status(jid: str, status: str = Form(...), user: dict = Depends(current_u
     return back(f"/vaga/{jid}", f"Status alterado para: {db.STATUSES[status]}.")
 
 
+PASTE_JS = (Path(__file__).parent / "static" / "paste.js").read_text(encoding="utf-8")
+
+
+@app.get("/static/paste.js")
+def paste_js():
+    return Response(PASTE_JS, media_type="text/javascript")
+
+
 @app.post("/vaga/{jid}/perguntar")
-def job_ask(jid: str, question: str = Form(""), user: dict = Depends(current_user)):
+def job_ask(jid: str, question: str = Form(""), file: UploadFile | None = File(None),
+            user: dict = Depends(current_user)):
     job_or_404(user["id"], jid)
     question = " ".join(question.split())[:1000]
+    attachment = None
+    if file is not None and file.filename:
+        data = file.file.read(attach.DOC_MAX + 1)
+        try:
+            attachment = attach.read(file.filename, data)
+        except attach.AttachError as e:
+            return back(f"/vaga/{jid}", str(e))
+    if attachment and len(question) < 3:
+        question = "O que este anexo mostra e o que devo fazer ou responder?"
     if len(question) < 3:
         return back(f"/vaga/{jid}", "Escreva a pergunta antes de enviar.")
     try:
-        pipeline.ask(user["id"], jid, question)
+        pipeline.ask(user["id"], jid, question, attachment)
     except llm.LLMError as e:
         return back(f"/vaga/{jid}", f"Não consegui responder agora: {e}")
     return RedirectResponse(f"/vaga/{jid}#perguntas", status_code=303)

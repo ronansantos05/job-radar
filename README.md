@@ -124,6 +124,7 @@ para a porta `8000`. O HTTPS fica por conta do painel.
 5. Atualize o status conforme a resposta (entrevista, oferta, recusada) e anote o que precisar.
 6. Ficou com dúvida? Em **Perguntar sobre esta vaga** o modelo responde olhando o seu perfil e a vaga
    (o que estudar para a entrevista, como responder a uma pergunta do formulário, se vale a pena).
+   Dá para anexar um print (colando com Ctrl+V), um PDF ou um DOCX; o arquivo não fica guardado.
 
 Na página **Perfil** dá para gerar o **currículo base**: o currículo geral, sem vaga, para você conferir
 como o perfil vira currículo antes de o sistema adaptar um para cada vaga.
@@ -150,7 +151,8 @@ voltam para a fila e são analisadas de novo; as que já têm currículo ou cand
 | `sources` | Fontes ativas |
 
 O modelo é escolhido no `.env` (`GROQ_MODEL`). Em modelos que raciocinam antes de responder (como
-`openai/gpt-oss-120b`), `GROQ_REASONING_EFFORT=low` deixa a análise mais rápida. Qualquer API compatível com OpenAI funciona trocando
+`openai/gpt-oss-120b`), `GROQ_REASONING_EFFORT=low` deixa a análise mais rápida. Perguntas com print usam
+`GROQ_VISION_MODEL` (um modelo que lê imagens). Qualquer API compatível com OpenAI funciona trocando
 `GROQ_BASE_URL`.
 
 ## Segurança
@@ -159,7 +161,9 @@ O modelo é escolhido no `.env` (`GROQ_MODEL`). Em modelos que raciocinam antes 
   depois de várias tentativas erradas.
 - **Isolamento por conta**: toda consulta de vaga, nota, currículo, anotação e perfil é filtrada pelo
   usuário logado; vagas adicionadas à mão só existem para quem as adicionou. Há testes automáticos disso.
-- Proteção contra CSRF nos formulários e cabeçalhos restritivos (CSP sem scripts, `noindex`).
+- Proteção contra CSRF nos formulários e cabeçalhos restritivos (`noindex`; a CSP só deixa rodar o
+  único script do próprio painel, que serve para colar um print na pergunta, e nenhum script embutido).
+- Anexos de perguntas são identificados pela assinatura do arquivo, têm limite de tamanho e não são salvos.
 - O texto das vagas é tratado como **dado não confiável**: é isolado nos prompts, a resposta do modelo
   é validada e o Markdown gerado é sanitizado antes de virar HTML.
 - O container roda sem root.

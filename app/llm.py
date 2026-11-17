@@ -1,6 +1,7 @@
 """Cliente mínimo da API da Groq (compatível com OpenAI). A chave vem só do ambiente."""
 from __future__ import annotations
 
+import base64
 import json
 import logging
 import os
@@ -12,6 +13,7 @@ log = logging.getLogger(__name__)
 
 DEFAULT_BASE_URL = "https://api.groq.com/openai/v1"
 DEFAULT_MODEL = "llama-3.3-70b-versatile"
+DEFAULT_VISION_MODEL = "qwen/qwen3.8-27b"  # modelo da Groq que lê imagens (usado só em perguntas com print)
 
 
 class LLMError(Exception):
@@ -31,20 +33,32 @@ def model() -> str:
     return os.getenv("GROQ_MODEL") or DEFAULT_MODEL
 
 
+def vision_model() -> str:
+    return os.getenv("GROQ_VISION_MODEL") or DEFAULT_VISION_MODEL
+
+
 def chat(system: str, user: str, *, json_mode: bool = False, max_tokens: int = 1200,
-         temperature: float = 0.2, retries: int = 3) -> str:
+         temperature: float = 0.2, retries: int = 3, image: tuple[bytes, str] | None = None) -> str:
+    """`image` = (bytes, tipo MIME): a pergunta vai com a imagem para o modelo de visão."""
     key = os.getenv("GROQ_API_KEY")
     if not key:
         raise LLMError("GROQ_API_KEY não configurada", fatal=True)
+    name = vision_model() if image else model()
+    content: str | list = user
+    if image:
+        data, mime = image
+        content = [{"type": "text", "text": user},
+                   {"type": "image_url",
+                    "image_url": {"url": f"data:{mime};base64,{base64.b64encode(data).decode()}"}}]
     payload = {
-        "model": model(),
-        "messages": [{"role": "system", "content": system}, {"role": "user", "content": user}],
+        "model": name,
+        "messages": [{"role": "system", "content": system}, {"role": "user", "content": content}],
         "temperature": temperature,
         "max_tokens": max_tokens,
     }
     if json_mode:
         payload["response_format"] = {"type": "json_object"}
-    if os.getenv("GROQ_REASONING_EFFORT"):  # só para modelos que raciocinam (ex.: openai/gpt-oss-120b)
+    if os.getenv("GROQ_REASONING_EFFORT") and not image:  # só para modelos que raciocinam (ex.: openai/gpt-oss-120b)
         payload["reasoning_effort"] = os.environ["GROQ_REASONING_EFFORT"]
     url = (os.getenv("GROQ_BASE_URL") or DEFAULT_BASE_URL).rstrip("/") + "/chat/completions"
 
@@ -64,7 +78,8 @@ def chat(system: str, user: str, *, json_mode: bool = False, max_tokens: int = 1
         if r.status_code in (401, 403):
             raise LLMError("chave da Groq recusada (confira GROQ_API_KEY)", fatal=True)
         if r.status_code == 404:
-            raise LLMError(f"modelo '{model()}' não encontrado (ajuste GROQ_MODEL)", fatal=True)
+            raise LLMError(f"modelo '{name}' não encontrado (ajuste "
+                           f"{'GROQ_VISION_MODEL' if image else 'GROQ_MODEL'})", fatal=not image)
         if r.status_code == 400 and json_mode and "json" in r.text.lower():
             raise LLMError("o modelo não conseguiu montar o JSON", bad_json=True)
         last = f"HTTP {r.status_code}: {r.text[:160]}"

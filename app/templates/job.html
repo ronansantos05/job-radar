@@ -82,10 +82,15 @@
         <div class="small">{{ q.answer | markdown }}</div>
       </div>
       {% endfor %}
-      <form method="post" action="/vaga/{{ job.id }}/perguntar">
-        <textarea name="question" rows="3" maxlength="1000" required placeholder="Ex.: o que responder se perguntarem pretensão? Quais lacunas estudar antes da entrevista?"></textarea>
+      <form method="post" action="/vaga/{{ job.id }}/perguntar" enctype="multipart/form-data" id="ask-form">
+        <textarea name="question" rows="3" maxlength="1000" placeholder="Ex.: o que responder se perguntarem pretensão? Cole um print aqui (Ctrl+V) e pergunte sobre ele."></textarea>
+        <p class="small muted" style="margin:6px 0 2px">Anexo (opcional): cole um print com Ctrl+V, arraste ou escolha
+          um arquivo. Aceita imagem até 3 MB, PDF, DOCX ou texto até 8 MB. O arquivo não fica guardado.</p>
+        <input type="file" name="file" accept="image/png,image/jpeg,image/webp,.pdf,.docx,.txt,.md">
+        <p class="small" id="ask-file-name" style="margin:4px 0"></p>
         <p><button class="primary">Perguntar</button> <span class="small muted">A resposta leva alguns segundos.</span></p>
       </form>
+      <script src="/static/paste.js" defer></script>
       {% if questions %}
       <form method="post" action="/vaga/{{ job.id }}/perguntas/limpar"><button class="small">Apagar perguntas</button></form>
       {% endif %}

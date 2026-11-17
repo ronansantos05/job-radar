@@ -571,3 +571,51 @@ def test_questions_about_a_job_are_private(monkeypatch):
     assert len(db.questions(ana["id"], jid)) == 2              # limpar na conta B não apaga as de A
     a.post(f"/vaga/{jid}/perguntas/limpar")
     assert db.questions(ana["id"], jid) == []
+
+
+def test_question_attachments(monkeypatch):
+    import io
+    import zipfile
+    from app import attach, pdf
+    ana = make_user("a@example.com")
+    jid = add_job_for(ana, 1)
+    a = login("a@example.com")
+    calls = []
+
+    def fake(system, user, **k):
+        calls.append((user, k.get("image")))
+        return "Resposta"
+
+    monkeypatch.setattr(llm, "chat", fake)
+    png = b"\x89PNG\r\n\x1a\n" + b"0" * 64
+    r = a.post(f"/vaga/{jid}/perguntar", data={"question": ""}, files={"file": ("../../tela 1.png", png, "x/y")})
+    assert r.headers["location"].endswith("#perguntas")
+    assert calls[-1][1] == (png, "image/png") and "tela 1.png" in calls[-1][0]
+    assert "[anexo: tela 1.png]" in db.questions(ana["id"], jid)[-1]["question"]
+
+    doc = io.BytesIO()
+    with zipfile.ZipFile(doc, "w") as z:
+        z.writestr("word/document.xml", "<w:document><w:p><w:t>Qual sua pretens&#227;o?</w:t></w:p>"
+                                        "<w:p><w:t>Envie at&#233; sexta</w:t></w:p></w:document>")
+    a.post(f"/vaga/{jid}/perguntar", data={"question": "Como respondo?"},
+           files={"file": ("form.docx", doc.getvalue(), "application/octet-stream")})
+    assert calls[-1][1] is None and "Qual sua pretensão?\nEnvie até sexta" in calls[-1][0]
+
+    made = pdf.render("# Teste\n\nPergunta do formulario: disponibilidade imediata?", "t")
+    a.post(f"/vaga/{jid}/perguntar", data={"question": "E isso?"}, files={"file": ("f.pdf", made, "application/pdf")})
+    assert "disponibilidade imediata" in calls[-1][0]
+
+    n = len(calls)
+    for name, data in (("a.exe", b"MZ\x00\x00" + b"\x00" * 50), ("big.png", png + b"0" * attach.IMAGE_MAX),
+                       ("vazio.pdf", b"%PDF-1.4 nada"), ("x.zip", b"PK\x03\x04lixo")):
+        r = a.post(f"/vaga/{jid}/perguntar", data={"question": "Oi, e isso?"}, files={"file": (name, data, "x/y")})
+        assert r.status_code == 303 and "msg=" in r.headers["location"], name
+    assert len(calls) == n                                   # nada disso chegou ao modelo
+    assert attach.safe_name("C:\\x\\<b>print</b>.png") == "b.png"
+
+    page = a.get(f"/vaga/{jid}")
+    assert 'enctype="multipart/form-data"' in page.text and "/static/paste.js" in page.text
+    assert "script-src 'self'" in page.headers["content-security-policy"]
+    assert "unsafe-inline'; img" in page.headers["content-security-policy"]   # estilo, não script
+    js = TestClient(main.app).get("/static/paste.js")
+    assert js.status_code == 200 and "javascript" in js.headers["content-type"] and "clipboardData" in js.text
