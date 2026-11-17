@@ -325,6 +325,15 @@ def reset_tries(uid: int) -> None:
         con.execute("UPDATE user_jobs SET tries=0 WHERE user_id=? AND status='nova'", (uid,))
 
 
+def requeue_scored(uid: int) -> int:
+    """Perfil ou preferências mudaram: as notas antigas deixam de valer. Só mexe nas vagas apenas
+    analisadas; as que já têm currículo, candidatura ou descarte manual ficam como estão."""
+    with connect() as con:
+        cur = con.execute("UPDATE user_jobs SET status='nova', score=NULL, verdict=NULL, tries=0, updated_at=?"
+                          " WHERE user_id=? AND status='analisada'", (now(), uid))
+        return cur.rowcount
+
+
 def save_score(uid: int, jid: str, score: int, verdict: dict) -> None:
     with connect() as con:
         con.execute("UPDATE user_jobs SET score=?, verdict=?, status='analisada', updated_at=?"

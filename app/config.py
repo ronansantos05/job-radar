@@ -9,7 +9,7 @@ import yaml
 
 ROOT = Path(__file__).resolve().parent.parent
 
-DEFAULT_SOURCES = ["remotive", "remoteok", "himalayas", "jobicy", "weworkremotely"]
+DEFAULT_SOURCES = ["remotive", "remoteok", "himalayas", "jobicy", "weworkremotely", "remotar", "backendbr"]
 
 
 def load_env(path: Path | None = None) -> None:

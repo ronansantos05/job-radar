@@ -25,6 +25,10 @@ keywords:
   - scikit-learn
   - fastapi
   - streamlit
+  - ciência de dados
+  - cientista de dados
+  - aprendizado de máquina
+  - inteligência artificial
 
 # Se o título tiver uma destas palavras, a vaga é ignorada sem gastar chamada do modelo.
 exclude_title:
@@ -42,4 +46,5 @@ min_score: 60             # nota a partir da qual a vaga aparece em "Compatívei
 max_scored_per_run: 40    # análises seguidas por pessoa antes de passar a vez para a próxima conta
 fetch_minutes: 30         # de quanto em quanto tempo o scanner busca vagas novas nas fontes
 
-sources: [remotive, remoteok, himalayas, jobicy, weworkremotely]
+# remotar e backendbr trazem vagas remotas de empresas brasileiras.
+sources: [remotive, remoteok, himalayas, jobicy, weworkremotely, remotar, backendbr]

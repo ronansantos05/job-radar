@@ -407,11 +407,17 @@ def profile_page(request: Request, user: dict = Depends(current_user)):
 def profile_save(name: str = Form(...), profile: str = Form(""), preferences: str = Form(""),
                  keywords: str = Form(""), exclude_title: str = Form(""), min_score: int = Form(60),
                  user: dict = Depends(current_user)):
+    profile, preferences = profile.strip()[:30000], preferences.strip()[:3000]
+    changed = (profile, preferences) != ((user.get("profile") or "").strip(),
+                                         (user.get("preferences") or "").strip())
     db.update_user(
-        user["id"], name=" ".join(name.split())[:80] or user["name"], profile=profile.strip()[:30000],
-        preferences=preferences.strip()[:3000], keywords=keywords.strip()[:3000],
+        user["id"], name=" ".join(name.split())[:80] or user["name"], profile=profile,
+        preferences=preferences, keywords=keywords.strip()[:3000],
         exclude_title=exclude_title.strip()[:3000], min_score=max(0, min(100, min_score)))
-    pipeline.refresh_in_background(user["id"])
+    n = pipeline.refresh_in_background(user["id"], rescore=changed)
+    if n:
+        return back("/perfil", f"Perfil salvo. Como o perfil ou as preferências mudaram, {n} vaga(s) já "
+                               "analisadas voltaram para a fila e vão receber nota nova.")
     return back("/perfil", "Perfil salvo.")
 
 

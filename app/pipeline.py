@@ -25,7 +25,7 @@ tailoring: dict[int, int] = {}  # usuário -> currículos que ainda faltam gerar
 IDLE_SECONDS = 20        # fila vazia: de quanto em quanto tempo o scanner olha de novo
 COOLDOWN_SECONDS = 120   # pausa depois de bater no limite da Groq
 # Fontes que pedem poucas consultas por dia: intervalo mínimo próprio, em segundos.
-SOURCE_MIN_INTERVAL = {"remotive": 6 * 3600}
+SOURCE_MIN_INTERVAL = {"remotive": 6 * 3600, "remotar": 3600, "backendbr": 3600}
 _source_fetched: dict[str, float] = {}
 
 CONTRACT_TYPES = {"pj", "freelance", "bolsa", "clt", "estagio", "indefinido"}
@@ -429,11 +429,13 @@ def wake() -> None:
     _wake.set()
 
 
-def refresh_in_background(uid: int) -> bool:
-    """O perfil mudou: vagas que falharam voltam para a fila e o scanner acorda."""
+def refresh_in_background(uid: int, rescore: bool = False) -> int:
+    """O perfil mudou: vagas que falharam voltam para a fila e o scanner acorda. Com `rescore`, as que
+    já tinham nota (e em que a pessoa ainda não mexeu) também voltam. Devolve quantas voltaram."""
     db.reset_tries(uid)
+    n = db.requeue_scored(uid) if rescore else 0
     wake()
-    return True
+    return n
 
 
 def scanner_loop(stop: threading.Event) -> None:

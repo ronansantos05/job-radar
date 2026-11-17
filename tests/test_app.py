@@ -28,7 +28,7 @@ def isolated(tmp_path, monkeypatch):
     monkeypatch.setenv("GROQ_API_KEY", "chave-falsa")
     monkeypatch.delenv("SIGNUP_CODE", raising=False)
     monkeypatch.delenv("DASH_PASSWORD", raising=False)
-    monkeypatch.setattr(pipeline, "refresh_in_background", lambda uid: True)
+    monkeypatch.setattr(pipeline, "wake", lambda: None)
     monkeypatch.setattr(pipeline, "score_one_in_background", lambda uid, jid: None)
     auth._failures.clear()
     db.init()
@@ -491,3 +491,46 @@ def test_pdf_layout_tolerates_sloppy_markdown():
                                                           ("", " "), ("", "d")]
     assert "Cada fato fica onde o perfil o coloca" in pipeline.TAILOR_SYSTEM
     assert "{" not in pipeline.CV_RULES
+
+
+def test_brazilian_sources_and_rescore_on_preferences_change():
+    (r,) = sources.parse_remotar({"data": [
+        {"id": 7, "title": "Cientista de Dados", "type": "remote", "active": True, "subtitle": "ML",
+         "description": "<p>Python</p>", "externalLink": "https://x.y/vaga", "createdAt": "2026-11-16T10:00:00-03:00",
+         "company": {"name": "Acme"}, "jobTags": [{"tag": {"name": "💼 PJ"}}, {"tag": {"name": "🌍 100% Remoto"}}],
+         "jobCategories": [{"category": {"name": "Dados"}}], "jobRequirements": [{"description": "SQL"}],
+         "jobSalary": {"from": None, "to": None}},
+        {"id": 8, "title": "Híbrida", "type": "hybrid", "active": True},
+        {"id": 9, "title": "Vencida", "type": "remote", "active": False}]})
+    assert (r["company"], r["url"], r["tags"]) == ("Acme", "https://x.y/vaga", ["PJ", "100% Remoto", "Dados"])
+    assert "Python" in r["description"] and "Requisitos: SQL" in r["description"] and r["posted_at"]
+    (g,) = sources.parse_github_issues([
+        {"number": 1, "title": "[Remoto] Dev Python Pleno na Acme", "html_url": "https://github.com/o/r/issues/1",
+         "labels": [{"name": "PJ"}, {"name": "Remoto"}], "body": "Vaga", "created_at": "2026-11-09T12:00:00Z"},
+        {"number": 2, "title": "[São Paulo] Dev presencial", "labels": [{"name": "CLT"}], "html_url": "u"},
+        {"number": 3, "title": "PR", "pull_request": {}, "labels": [{"name": "Remoto"}]}], "backendbr")
+    assert (g["title"], g["company"], g["tags"]) == ("Dev Python Pleno na Acme", "Acme", ["PJ", "Remoto"])
+    assert {"remotar", "backendbr"} <= set(sources.SOURCES)
+
+    ana, bia = make_user("a@example.com"), make_user("b@example.com")
+    scored, with_cv, other = add_job_for(ana, 1), add_job_for(ana, 2), add_job_for(bia, 1)
+    db.save_score(ana["id"], scored, 20, {})
+    db.save_score(ana["id"], with_cv, 80, {})
+    db.save_docs(ana["id"], with_cv, "# CV", "Carta", generated=True)
+    db.save_score(bia["id"], other, 70, {})
+    monkey_wake = pipeline.wake
+    pipeline.wake = lambda: None
+    try:
+        a = login("a@example.com")
+        form = {"name": "Ana", "profile": ana["profile"], "preferences": ana.get("preferences") or "",
+                "keywords": "python", "exclude_title": "", "min_score": "60"}
+        r = a.post("/perfil", data=form)                      # nada de perfil/preferências mudou
+        assert db.get_job(ana["id"], scored)["status"] == "analisada"
+        r = a.post("/perfil", data={**form, "preferences": "Prefiro empresas brasileiras."})
+        assert r.status_code == 303 and "nota%20nova" in r.headers["location"] or "nota+nova" in r.headers["location"]
+        job = db.get_job(ana["id"], scored)
+        assert (job["status"], job["score"]) == ("nova", None)
+        assert db.get_job(ana["id"], with_cv)["status"] == "curriculo"   # já trabalhada: não volta
+        assert db.get_job(bia["id"], other)["score"] == 70               # outra conta: intocada
+    finally:
+        pipeline.wake = monkey_wake

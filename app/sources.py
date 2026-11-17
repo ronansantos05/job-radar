@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import logging
+import re
 import xml.etree.ElementTree as ET
 from datetime import datetime, timezone
 from email.utils import parsedate_to_datetime
@@ -183,6 +184,71 @@ def parse_wwr(xml_text: str) -> list[dict]:
 
 # ---------------------------------------------------------------- coletores
 
+def _plain_tag(name) -> str:
+    """Tira o emoji que a Remotar põe na frente das etiquetas ("💼 CLT" -> "CLT")."""
+    return re.sub(r"^[^\w]+", "", str(name or "")).strip()
+
+
+def parse_remotar(data: dict) -> list[dict]:
+    """Remotar: vagas remotas de empresas brasileiras (ou abertas ao Brasil)."""
+    out = []
+    for j in data.get("data", []):
+        if not j.get("active", True) or j.get("expired") or j.get("type") not in (None, "remote"):
+            continue  # híbrida ou presencial fica de fora
+        company = (j.get("company") or {}).get("name") or j.get("companyDisplayName")
+        tags = [_plain_tag((t.get("tag") or {}).get("name")) for t in j.get("jobTags") or []]
+        tags += [(c.get("category") or {}).get("name") for c in j.get("jobCategories") or []]
+        reqs = [r.get("description") for r in j.get("jobRequirements") or [] if r.get("description")]
+        text = "\n".join(filter(None, [j.get("subtitle"), j.get("description"),
+                                        "Requisitos: " + "; ".join(reqs) if reqs else ""]))
+        pay = j.get("jobSalary") or {}
+        out.append(_job("remotar", j.get("id"), j.get("title"), company,
+                        j.get("externalLink") or f"https://remotar.com.br/job/{j.get('id')}",
+                        "Brasil (remoto)", [t for t in tags if t], text,
+                        _salary(pay.get("from"), pay.get("to"), pay.get("currency") or "BRL"),
+                        j.get("createdAt")))
+    return out
+
+
+def parse_github_issues(items: list, source: str) -> list[dict]:
+    """Repositórios de vagas da comunidade brasileira no GitHub (uma vaga por issue aberta)."""
+    out = []
+    for i in items if isinstance(items, list) else []:
+        if "pull_request" in i:
+            continue
+        labels = [l.get("name") for l in i.get("labels") or [] if l.get("name")]
+        title = i.get("title") or ""
+        if not any(normalize_word(x) == "remoto" for x in labels) and "remot" not in title.lower():
+            continue
+        m = re.search(r"(?:\bna\b|\bno\b|@|-)\s+([^-@\]\[]{2,60})$", title)
+        out.append(_job(source, i.get("number"), re.sub(r"^(\s*\[[^\]]*\])+\s*", "", title) or title,
+                        m.group(1).strip() if m else "", i.get("html_url"), "Brasil (remoto)", labels,
+                        i.get("body"), "", i.get("created_at")))
+    return out
+
+
+def normalize_word(text) -> str:
+    return str(text or "").strip().lower()
+
+
+def fetch_remotar() -> list[dict]:
+    seen: dict[str, dict] = {}
+    for term in ("python", "machine learning", "inteligência artificial", "ciência de dados"):
+        try:
+            data = _get("https://api.remotar.com.br/jobs", search=term, active="true").json()
+            for job in parse_remotar(data):
+                seen[job["ext_id"]] = job
+        except httpx.HTTPError as e:
+            log.warning("remotar (%s): %s", term, e)
+    return list(seen.values())
+
+
+def fetch_backendbr() -> list[dict]:
+    data = _get("https://api.github.com/repos/backend-br/vagas/issues", state="open", per_page=100,
+                sort="created").json()
+    return parse_github_issues(data, "backendbr")
+
+
 def fetch_remotive() -> list[dict]:
     return parse_remotive(_get("https://remotive.com/api/remote-jobs").json())
 
@@ -227,4 +293,6 @@ SOURCES = {
     "himalayas": fetch_himalayas,
     "jobicy": fetch_jobicy,
     "weworkremotely": fetch_wwr,
+    "remotar": fetch_remotar,
+    "backendbr": fetch_backendbr,
 }

@@ -37,7 +37,7 @@ fontes (APIs/RSS) ─► filtro por palavras-chave ─► LLM dá a nota ─► 
 
 | Parte | Arquivo |
 |---|---|
-| Coletores (Remotive, RemoteOK, Himalayas, Jobicy, We Work Remotely) | `app/sources.py` |
+| Coletores (Remotive, RemoteOK, Himalayas, Jobicy, We Work Remotely, Remotar, backend-br) | `app/sources.py` |
 | Filtro, nota e currículo adaptado | `app/pipeline.py` |
 | Cliente da Groq (API compatível com OpenAI) | `app/llm.py` |
 | Contas, senhas e sessões | `app/auth.py` |
@@ -132,6 +132,10 @@ Com o **scanner ligado** (botão no topo), o painel trabalha sozinho: busca vaga
 `fetch_minutes` e analisa a fila sem parar, até esvaziar. Quando a Groq responde que o limite foi atingido,
 ele espera e continua. **Desligar** para tudo para aquela conta: nada é buscado nem analisado até ligar de
 novo. O scanner só dá notas; gerar o currículo e enviar a candidatura continuam sendo ações suas.
+
+As **preferências** não buscam vagas: elas entram na nota. Quem decide o que é coletado são as fontes e
+as suas **palavras-chave**. Quando você muda o perfil ou as preferências, as vagas que só tinham nota
+voltam para a fila e são analisadas de novo; as que já têm currículo ou candidatura não são tocadas.
 
 ## Configuração (`config.yaml`)
 
