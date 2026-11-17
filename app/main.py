@@ -17,6 +17,7 @@ import markdown as md
 from fastapi import Depends, FastAPI, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import PlainTextResponse, RedirectResponse, Response
 from fastapi.templating import Jinja2Templates
+from markupsafe import Markup
 
 from . import auth, config, db, llm, pdf, pipeline
 
@@ -125,6 +126,7 @@ def safe_url(url: str | None) -> str:
 templates.env.filters["date"] = fmt_date
 templates.env.filters["datetime"] = fmt_datetime
 templates.env.filters["safe_url"] = safe_url
+templates.env.filters["markdown"] = lambda text: Markup(render_markdown(text))
 
 
 def page(request: Request, name: str, user: dict | None = None, **ctx):
@@ -332,7 +334,8 @@ def add_job(title: str = Form(...), company: str = Form(""), url: str = Form("")
 def job_page(request: Request, jid: str, user: dict = Depends(current_user)):
     return page(request, "job.html", user, job=job_or_404(user["id"], jid), statuses=db.STATUSES,
                 has_photo=db.get_extras(user["id"])["has_photo"],
-                min_score=user["min_score"], events=db.recent_events(user["id"], 30, jid))
+                min_score=user["min_score"], events=db.recent_events(user["id"], 30, jid),
+                questions=db.questions(user["id"], jid))
 
 
 @app.post("/vaga/{jid}/status")
@@ -342,6 +345,26 @@ def job_status(jid: str, status: str = Form(...), user: dict = Depends(current_u
         raise HTTPException(400, "Status inválido")
     db.set_status(user["id"], jid, status)
     return back(f"/vaga/{jid}", f"Status alterado para: {db.STATUSES[status]}.")
+
+
+@app.post("/vaga/{jid}/perguntar")
+def job_ask(jid: str, question: str = Form(""), user: dict = Depends(current_user)):
+    job_or_404(user["id"], jid)
+    question = " ".join(question.split())[:1000]
+    if len(question) < 3:
+        return back(f"/vaga/{jid}", "Escreva a pergunta antes de enviar.")
+    try:
+        pipeline.ask(user["id"], jid, question)
+    except llm.LLMError as e:
+        return back(f"/vaga/{jid}", f"Não consegui responder agora: {e}")
+    return RedirectResponse(f"/vaga/{jid}#perguntas", status_code=303)
+
+
+@app.post("/vaga/{jid}/perguntas/limpar")
+def job_ask_clear(jid: str, user: dict = Depends(current_user)):
+    job_or_404(user["id"], jid)
+    db.clear_questions(user["id"], jid)
+    return back(f"/vaga/{jid}", "Perguntas apagadas.")
 
 
 @app.post("/vaga/{jid}/notas")

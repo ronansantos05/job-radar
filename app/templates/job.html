@@ -73,6 +73,23 @@
         <p><button>Salvar anotações</button></p>
       </form>
     </div>
+    <div class="card" id="perguntas">
+      <h2>Perguntar sobre esta vaga</h2>
+      <p class="small muted">A resposta usa o seu perfil, o texto da vaga, a análise e o currículo adaptado.</p>
+      {% for q in questions %}
+      <div style="border-top:1px solid var(--line);padding:8px 0">
+        <p class="small"><strong>{{ q.question }}</strong> <span class="muted">· {{ q.at | datetime }}</span></p>
+        <div class="small">{{ q.answer | markdown }}</div>
+      </div>
+      {% endfor %}
+      <form method="post" action="/vaga/{{ job.id }}/perguntar">
+        <textarea name="question" rows="3" maxlength="1000" required placeholder="Ex.: o que responder se perguntarem pretensão? Quais lacunas estudar antes da entrevista?"></textarea>
+        <p><button class="primary">Perguntar</button> <span class="small muted">A resposta leva alguns segundos.</span></p>
+      </form>
+      {% if questions %}
+      <form method="post" action="/vaga/{{ job.id }}/perguntas/limpar"><button class="small">Apagar perguntas</button></form>
+      {% endif %}
+    </div>
     <div class="card">
       <h2>Histórico</h2>
       <table>{% for e in events %}

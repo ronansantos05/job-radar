@@ -534,3 +534,40 @@ def test_brazilian_sources_and_rescore_on_preferences_change():
         assert db.get_job(bia["id"], other)["score"] == 70               # outra conta: intocada
     finally:
         pipeline.wake = monkey_wake
+
+
+def test_questions_about_a_job_are_private(monkeypatch):
+    ana, bia = make_user("a@example.com"), make_user("b@example.com")
+    jid = add_job_for(ana, 1)
+    add_job_for(bia, 1)   # a mesma vaga do catálogo, na lista da outra conta
+    db.save_score(ana["id"], jid, 88, {"resumo": "Encaixe forte"})
+    a, b = login("a@example.com"), login("b@example.com")
+    seen = []
+
+    def fake(system, user, **k):
+        seen.append(user)
+        return "Estude **PyTorch**. <script>x</script>"
+
+    monkeypatch.setattr(llm, "chat", fake)
+    assert "Perguntar sobre esta vaga" in a.get(f"/vaga/{jid}").text
+    r = a.post(f"/vaga/{jid}/perguntar", data={"question": "O que estudar?"})
+    assert r.status_code == 303 and r.headers["location"].endswith("#perguntas")
+    assert "O que estudar?" in seen[0] and ana["profile"] in seen[0] and "Encaixe forte" in seen[0]
+    page = a.get(f"/vaga/{jid}").text
+    assert "O que estudar?" in page and "<strong>PyTorch</strong>" in page and "<script>x" not in page
+    a.post(f"/vaga/{jid}/perguntar", data={"question": "E o salário?"})
+    assert "P: O que estudar?" in seen[1]                      # a conversa anterior vai junto
+    assert "O que estudar?" not in b.get(f"/vaga/{jid}").text  # a outra conta não vê
+    assert a.post(f"/vaga/{jid}/perguntar", data={"question": " "}).status_code == 303 and len(seen) == 2
+
+    def broken(*args, **kwargs):
+        raise llm.LLMError("limite atingido", fatal=True)
+
+    monkeypatch.setattr(llm, "chat", broken)
+    r = a.post(f"/vaga/{jid}/perguntar", data={"question": "Outra dúvida?"})
+    assert r.status_code == 303 and "msg=" in r.headers["location"]
+    assert len(db.questions(ana["id"], jid)) == 2
+    b.post(f"/vaga/{jid}/perguntas/limpar")
+    assert len(db.questions(ana["id"], jid)) == 2              # limpar na conta B não apaga as de A
+    a.post(f"/vaga/{jid}/perguntas/limpar")
+    assert db.questions(ana["id"], jid) == []

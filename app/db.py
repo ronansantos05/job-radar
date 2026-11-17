@@ -57,6 +57,10 @@ CREATE INDEX IF NOT EXISTS user_jobs_status ON user_jobs(user_id, status);
 CREATE TABLE IF NOT EXISTS events(
   id INTEGER PRIMARY KEY AUTOINCREMENT, user_id INTEGER NOT NULL, job_id TEXT, at TEXT, kind TEXT, detail TEXT);
 CREATE INDEX IF NOT EXISTS events_user ON events(user_id, id);
+CREATE TABLE IF NOT EXISTS questions(
+  id INTEGER PRIMARY KEY AUTOINCREMENT, user_id INTEGER NOT NULL, job_id TEXT NOT NULL, at TEXT,
+  question TEXT, answer TEXT);
+CREATE INDEX IF NOT EXISTS questions_job ON questions(user_id, job_id, id);
 CREATE TABLE IF NOT EXISTS runs(
   id INTEGER PRIMARY KEY AUTOINCREMENT, started_at TEXT, finished_at TEXT,
   collected INTEGER DEFAULT 0, new INTEGER DEFAULT 0, scored INTEGER DEFAULT 0, errors TEXT DEFAULT '');
@@ -364,6 +368,25 @@ def set_status(uid: int, jid: str, status: str) -> None:
             con.execute("UPDATE user_jobs SET applied_at=? WHERE user_id=? AND job_id=? AND applied_at IS NULL",
                         (now(), uid, jid))
         add_event(con, uid, jid, "status", STATUSES[status])
+
+
+def add_question(uid: int, jid: str, question: str, answer: str) -> None:
+    with connect() as con:
+        con.execute("INSERT INTO questions(user_id, job_id, at, question, answer) VALUES(?,?,?,?,?)",
+                    (uid, jid, now(), question, answer))
+
+
+def questions(uid: int, jid: str, limit: int = 30) -> list[dict]:
+    """Perguntas da pessoa sobre a vaga, da mais antiga para a mais nova (só as últimas `limit`)."""
+    with connect() as con:
+        rows = con.execute("SELECT id, at, question, answer FROM questions WHERE user_id=? AND job_id=?"
+                           " ORDER BY id DESC LIMIT ?", (uid, jid, limit)).fetchall()
+        return [dict(r) for r in reversed(rows)]
+
+
+def clear_questions(uid: int, jid: str) -> None:
+    with connect() as con:
+        con.execute("DELETE FROM questions WHERE user_id=? AND job_id=?", (uid, jid))
 
 
 def set_notes(uid: int, jid: str, notes: str) -> None:

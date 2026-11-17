@@ -122,6 +122,8 @@ para a porta `8000`. O HTTPS fica por conta do painel.
    Se você enviou uma foto em **Perfil**, há também o botão **com foto** (a foto nunca entra sozinha).
 4. Envie a candidatura no site da vaga e clique em **Marcar como submetida**.
 5. Atualize o status conforme a resposta (entrevista, oferta, recusada) e anote o que precisar.
+6. Ficou com dúvida? Em **Perguntar sobre esta vaga** o modelo responde olhando o seu perfil e a vaga
+   (o que estudar para a entrevista, como responder a uma pergunta do formulário, se vale a pena).
 
 Na página **Perfil** dá para gerar o **currículo base**: o currículo geral, sem vaga, para você conferir
 como o perfil vira currículo antes de o sistema adaptar um para cada vaga.
